@@ -11,6 +11,13 @@ import type { OrderPayload, RefundPayload } from "./shopify.ts";
 
 export type IngestResult = "criado" | "duplicado";
 
+/** Ordem cronológica real: compara o instante, não a string (fusos podem vir misturados). */
+function byShopInstant(a: RefundRow, b: RefundRow): number {
+  const diff = Date.parse(a.shopCreatedAt) - Date.parse(b.shopCreatedAt);
+  if (diff !== 0) return diff;
+  return a.refundId.length - b.refundId.length || (a.refundId < b.refundId ? -1 : a.refundId > b.refundId ? 1 : 0);
+}
+
 function applyRefund(store: Store, order: OrderRow, refund: RefundRow, at: string): void {
   const decision = decideRefund({
     orderTotalCents: order.totalCents,
@@ -61,7 +68,7 @@ export function ingestOrder(store: Store, clock: Clock, payload: OrderPayload, w
     if (inserted) {
       // Estornos que chegaram antes do pedido são aplicados aqui, na mesma transação.
       const order = store.getOrder(payload.orderId)!;
-      for (const pending of store.pendingRefundsOf(payload.orderId)) applyRefund(store, order, pending, now);
+      for (const pending of store.pendingRefundsOf(payload.orderId).sort(byShopInstant)) applyRefund(store, order, pending, now);
     }
     store.logDelivery({ webhookId, topic: "orders/paid", resourceId: payload.orderId, outcome: result, receivedAt: now });
     return result;
@@ -74,6 +81,22 @@ export function logIgnoredOrder(store: Store, clock: Clock, payload: OrderPayloa
     topic: "orders/paid",
     resourceId: payload.orderId,
     outcome: `ignorado:${payload.financialStatus}`,
+    receivedAt: clock.now().toISOString(),
+  });
+}
+
+/** Entrega recusada (payload inválido) também fica no log, com o motivo. */
+export function logRejectedDelivery(
+  store: Store,
+  clock: Clock,
+  d: { topic: string; webhookId: string; body: unknown; message: string },
+): void {
+  const id = typeof d.body === "object" && d.body !== null ? (d.body as Record<string, unknown>).id : undefined;
+  store.logDelivery({
+    webhookId: d.webhookId,
+    topic: d.topic,
+    resourceId: typeof id === "string" || typeof id === "number" ? String(id) : "?",
+    outcome: `recusado: ${d.message}`,
     receivedAt: clock.now().toISOString(),
   });
 }
@@ -139,7 +162,7 @@ export function refundView(r: RefundRow) {
 export function getOrderView(store: Store, orderId: string) {
   const order = store.getOrder(orderId);
   if (!order) throw notFound(`pedido ${orderId} não encontrado`);
-  const refunds = store.refundsOf(orderId);
+  const refunds = store.refundsOf(orderId).sort(byShopInstant);
   const refundedCents = refunds.reduce((sum, r) => sum + (r.appliedCents ?? 0), 0);
   return {
     orderId: order.orderId,

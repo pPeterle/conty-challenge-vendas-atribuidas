@@ -97,13 +97,32 @@ describe("webhook de pedido", () => {
     expect((await ctx.getJson("/orders/1001")).status).toBe(404);
   });
 
-  it("payload inválido devolve 400 com mensagem", async () => {
+  it("payload inválido devolve 400 com mensagem e a entrega recusada fica no log", async () => {
     const ctx = setup();
-    const res = await ctx.sendOrder(order({ total_price: 100 }));
+    const res = await ctx.sendOrder(order({ total_price: "10.005" }), { webhookId: "w-ruim" });
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({
       error: { code: "VALIDATION_ERROR", message: 'total_price precisa ser string decimal, ex.: "199.90"' },
     });
+    const log = ctx.db.prepare("SELECT webhook_id, resource_id, outcome FROM webhook_deliveries").all();
+    expect(log).toEqual([
+      { webhook_id: "w-ruim", resource_id: "1001", outcome: 'recusado: total_price precisa ser string decimal, ex.: "199.90"' },
+    ]);
+  });
+
+  it("total com zero depois da segunda casa (\"1.230\") é aceito", async () => {
+    const ctx = await setupWithCreators();
+    const res = await ctx.sendOrder(order({ total_price: "1.230" }));
+    expect(res.status).toBe(201);
+    expect(((await res.json()) as any).order.totalCents).toBe(123);
+  });
+
+  it("id 123 e \"0123\" são o mesmo pedido; id 0 é recusado", async () => {
+    const ctx = await setupWithCreators();
+    expect((await ctx.sendOrder(order({ id: 123 }))).status).toBe(201);
+    expect((await ctx.sendOrder(order({ id: "0123" }))).status).toBe(200);
+    expect((ctx.db.prepare("SELECT COUNT(*) AS n FROM orders").get() as { n: number }).n).toBe(1);
+    expect((await ctx.sendOrder(order({ id: 0 }))).status).toBe(400);
   });
 
   it("atribuição gravada não pode ser reescrita depois, nem direto no banco", async () => {

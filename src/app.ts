@@ -10,6 +10,7 @@ import {
   ingestOrder,
   ingestRefund,
   logIgnoredOrder,
+  logRejectedDelivery,
   registerCreator,
 } from "./sales.ts";
 import { COUNTED_FINANCIAL_STATUSES, parseOrderPayload, parseRefundPayload, verifyHmac } from "./shopify.ts";
@@ -83,7 +84,10 @@ export function createApp({ db, clock, webhookSecret }: AppDeps) {
   app.post("/webhooks/shopify/orders", async (c) => {
     const { body, webhookId } = await readWebhook(c, webhookSecret);
     const parsed = parseOrderPayload(body);
-    if (!parsed.ok) throw validation(parsed.message);
+    if (!parsed.ok) {
+      logRejectedDelivery(store, clock, { topic: "orders/paid", webhookId, body, message: parsed.message });
+      throw validation(parsed.message);
+    }
     const order = parsed.value;
     if (!(COUNTED_FINANCIAL_STATUSES as readonly string[]).includes(order.financialStatus)) {
       // 200 para a loja não reenviar; o pedido entra quando vier o orders/paid.
@@ -97,7 +101,10 @@ export function createApp({ db, clock, webhookSecret }: AppDeps) {
   app.post("/webhooks/shopify/refunds", async (c) => {
     const { body, webhookId } = await readWebhook(c, webhookSecret);
     const parsed = parseRefundPayload(body);
-    if (!parsed.ok) throw validation(parsed.message);
+    if (!parsed.ok) {
+      logRejectedDelivery(store, clock, { topic: "refunds/create", webhookId, body, message: parsed.message });
+      throw validation(parsed.message);
+    }
     const result = ingestRefund(store, clock, parsed.value, webhookId);
     return c.json({ result, refund: getRefundView(store, parsed.value.refundId) }, result === "criado" ? 201 : 200);
   });

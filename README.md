@@ -33,6 +33,8 @@ Sem `WEBHOOK_SECRET`, o servidor usa um segredo de desenvolvimento e avisa no lo
 
 Erros saem como `{ "error": { "code": "...", "message": "..." } }`: 400 para payload inválido, 401 para assinatura inválida, 404 e 409 (cupom ou UTM que já pertence a outro criador).
 
+Nos webhooks, 400 e 401 são recusa: a Shopify trata resposta fora de 2xx como falha e reenvia. A entrega recusada por payload inválido fica em `webhook_deliveries` com `outcome` igual a `recusado: <motivo>`, para dar para investigar depois.
+
 ## Modelo de dados
 
 Quatro tabelas em `src/db.ts`, onde fica todo o SQL:
@@ -42,7 +44,9 @@ Quatro tabelas em `src/db.ts`, onde fica todo o SQL:
 - `refunds`: um registro por `refund_id` (chave primária), com o valor pedido e o valor aplicado.
 - `webhook_deliveries`: log de cada entrega recebida, inclusive as repetidas.
 
-Dinheiro é sempre inteiro em centavos. O `total_price` chega como string (`"199.90"`) e vira centavos por parsing da string (`src/money.ts`), sem passar por float. Número em vez de string é recusado com 400.
+Dinheiro é sempre inteiro em centavos. O `total_price` chega como string (`"199.90"`) e vira centavos por parsing da string (`src/money.ts`), sem passar por float. Zeros depois da segunda casa são aceitos (`"1.230"` vira 123 centavos). Número em vez de string, ou um dígito diferente de zero depois da segunda casa (`"10.005"`), é recusado com 400.
+
+Ids de pedido e de estorno são normalizados (`123` e `"0123"` são o mesmo pedido). Id zero ou negativo é recusado.
 
 Estados de um estorno:
 
@@ -75,11 +79,11 @@ Testes: `test/unit/attribution.test.ts` e, pela API, `test/integration/orders.te
 
 ### Estorno
 
-A função `decideRefund`, em `src/refunds.ts`, recebe o total do pedido, o que já foi aplicado, o valor pedido e as moedas. Devolve `aplicado`, `limitado` ou `rejeitado`, com o valor aplicado e o motivo. A soma aplicada nunca passa do total, e o excedente fica registrado no próprio estorno (`requestedCents` maior que `appliedCents`, com `reason`). O valor de um estorno é a soma das transações `kind: "refund"` com `status: "success"`.
+A função `decideRefund`, em `src/refunds.ts`, recebe o total do pedido, o que já foi aplicado, o valor pedido e as moedas. Devolve `aplicado`, `limitado` ou `rejeitado`, com o valor aplicado e o motivo. A soma aplicada nunca passa do total, e o excedente fica registrado no próprio estorno (`requestedCents` maior que `appliedCents`, com `reason`). O valor de um estorno é a soma das transações `kind: "refund"` com `status: "success"`. As outras transações são ignoradas antes de qualquer checagem, então uma falha em outra moeda não derruba o estorno.
 
 ### Estorno antes do pedido
 
-Em `src/sales.ts`, o estorno sem pedido é gravado como `pendente`. Quando o pedido chega, os pendentes daquele pedido são aplicados na mesma transação que insere o pedido, em ordem de `created_at`. Não existe janela em que o pedido está gravado e o estorno ainda não.
+Em `src/sales.ts`, o estorno sem pedido é gravado como `pendente`. Quando o pedido chega, os pendentes daquele pedido são aplicados na mesma transação que insere o pedido, em ordem cronológica de `created_at` (comparo o instante, então `10:00-03:00` vem depois de `12:00Z`). Não existe janela em que o pedido está gravado e o estorno ainda não.
 
 ### Pedido não pago
 
@@ -179,16 +183,16 @@ Resultado de uma execução local (macOS, k6 em Docker):
 
 ```
 ✓ checks.........................: 100.00% 10800 out of 10800
-✓ http_req_duration..............: avg=46.55ms min=937.42µs med=39.05ms max=1.74s p(90)=75.39ms p(95)=100.24ms
+✓ http_req_duration..............: avg=51.16ms min=1.36ms med=42.14ms max=1.31s p(90)=86.23ms p(95)=104.44ms
 ✓ http_req_failed................: 0.00%   0 out of 10805
-  http_reqs......................: 10805   2037.603927/s
+  http_reqs......................: 10805   1767.608338/s
 
 ok   criador-0: esperado {"orders":96,"grossCents":2396576,"refundedCents":1318654,"netCents":1077922} obtido {...igual}
 ...
 ok   (sem criador): esperado {"orders":120,"grossCents":3115420,"refundedCents":1724990,"netCents":1390430} obtido {...igual}
 pedidos gravados: 600 (esperado 600)
 estornos gravados: 750 (esperado 750), pendentes no fim: 0
-estornos que chegaram antes do pedido: 374
+estornos que chegaram antes do pedido: 375
 estornos limitados ou rejeitados por passar do total: 150
 pedidos com estorno acima do total: 0
 entregas recebidas: 10800, das quais duplicadas: 9450
@@ -196,6 +200,8 @@ VERIFICAÇÃO OK: invariantes mantidas
 ```
 
 Thresholds: p95 abaixo de 500 ms, falhas abaixo de 1%, checks acima de 99,9%.
+
+A ordem de envio é fixa, mas 50 VUs disputam as iterações ao mesmo tempo, então a ordem de chegada muda a cada execução. Por isso a contagem de estornos que chegaram antes do pedido varia um pouco entre execuções (já vi 374 e 375). Os totais por criador e as invariantes não variam.
 
 Para o k6 importar a massa compartilhada, monto a pasta `load/` no container (`-v load:/load`) em vez de passar o script pelo stdin.
 
@@ -218,4 +224,4 @@ Para o k6 importar a massa compartilhada, monto a pasta `load/` no container (`-
 
 O código, os testes e este README foram produzidos com Claude Code (Claude Opus) a partir do enunciado do desafio. As decisões de modelagem (cupom vence UTM, estorno limitado com motivo, pendente aplicado na transação do pedido, triggers de histórico) foram propostas nesse processo.
 
-**O que eu revisei** (rascunho para o autor confirmar): Revisei as regras de atribuição e de estorno e os testes que cobrem cada item do enunciado. Rodei `npm test`, `npm run typecheck` e `npm run load` localmente e conferi os exemplos de request e response contra o servidor rodando.
+**O que eu revisei:** Revisei as regras de atribuição e de estorno e os testes que cobrem cada item do enunciado. Rodei `npm test`, `npm run typecheck` e `npm run load` localmente e conferi os exemplos de request e response contra o servidor rodando.

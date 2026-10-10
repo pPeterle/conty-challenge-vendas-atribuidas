@@ -46,6 +46,34 @@ describe("payload de estorno", () => {
     });
     expect(parsed.ok && parsed.value).toMatchObject({ amountCents: 3550, currency: "BRL" });
   });
+
+  it("transação com falha em outra moeda não derruba o estorno válido", () => {
+    const parsed = parseRefundPayload({
+      id: 9,
+      order_id: 1,
+      created_at: "2026-01-02T00:00:00Z",
+      transactions: [
+        { amount: "10.00", kind: "refund", status: "failure", currency: "USD" },
+        { amount: "30.00", kind: "refund", status: "success", currency: "BRL" },
+      ],
+    });
+    expect(parsed.ok && parsed.value).toMatchObject({ amountCents: 3000, currency: "BRL" });
+  });
+});
+
+describe("ids", () => {
+  const base = { total_price: "1.00", currency: "BRL", financial_status: "paid", created_at: "2026-01-01T00:00:00Z" };
+
+  it("123 e \"0123\" viram o mesmo id canônico", () => {
+    const a = parseOrderPayload({ ...base, id: 123 });
+    const b = parseOrderPayload({ ...base, id: "0123" });
+    expect(a.ok && a.value.orderId).toBe("123");
+    expect(b.ok && b.value.orderId).toBe("123");
+  });
+
+  it("recusa id zero ou negativo", () => {
+    for (const id of [0, "0", "000", -5, "-5"]) expect(parseOrderPayload({ ...base, id }).ok).toBe(false);
+  });
 });
 
 describe("HMAC", () => {

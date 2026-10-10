@@ -81,6 +81,19 @@ describe("webhook de estorno", () => {
     expect(view.body.refunds[1].reason).toContain("2000 centavos pedidos a mais");
   });
 
+  it("pendentes são aplicados pelo instante real, mesmo com fusos misturados", async () => {
+    const ctx = await setupWithCreators();
+    // 10:00-03:00 é 13:00Z, depois de 12:00Z, embora a string venha antes na ordem alfabética
+    await ctx.sendRefund(refund(1, "60.00", { created_at: "2026-03-05T10:00:00-03:00" }));
+    await ctx.sendRefund(refund(2, "60.00", { created_at: "2026-03-05T12:00:00Z" }));
+    await ctx.sendOrder(order());
+    const view = await ctx.getJson("/orders/1001");
+    expect(view.body.refunds.map((r: any) => [r.refundId, r.status, r.appliedCents])).toEqual([
+      ["2", "aplicado", 6000],
+      ["1", "limitado", 4000],
+    ]);
+  });
+
   it("estorno num pedido já zerado é rejeitado, fica registrado e não muda o líquido", async () => {
     const ctx = await setupWithCreators();
     await ctx.sendOrder(order());

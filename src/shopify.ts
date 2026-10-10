@@ -36,11 +36,14 @@ function isObject(value: unknown): value is Json {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// Ids da Shopify são inteiros grandes; guardamos como texto.
+// Ids da Shopify são inteiros grandes; guardamos como texto canônico, para que
+// 123 e "0123" sejam o mesmo pedido.
 function parseId(value: unknown): string | null {
-  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return String(value);
-  if (typeof value === "string" && /^\d{1,20}$/.test(value)) return value;
-  return null;
+  let id: bigint;
+  if (typeof value === "number" && Number.isSafeInteger(value)) id = BigInt(value);
+  else if (typeof value === "string" && /^\d{1,20}$/.test(value)) id = BigInt(value);
+  else return null;
+  return id > 0n ? String(id) : null;
 }
 
 function parseTimestamp(value: unknown): string | null {
@@ -131,6 +134,8 @@ export function parseRefundPayload(body: unknown): Parsed<RefundPayload> {
   let currency: string | null = null;
   for (const tx of body.transactions) {
     if (!isObject(tx)) return { ok: false, message: "cada transação precisa ser um objeto" };
+    // Só transação de estorno com sucesso devolve dinheiro; as outras não entram nem na checagem de moeda.
+    if (tx.kind !== "refund" || tx.status !== "success") continue;
     const cents = parseMoneyToCents(tx.amount);
     if (cents === null) return { ok: false, message: 'amount da transação precisa ser string decimal, ex.: "50.00"' };
     if (tx.currency !== undefined) {
@@ -141,7 +146,7 @@ export function parseRefundPayload(body: unknown): Parsed<RefundPayload> {
       }
       currency = txCurrency;
     }
-    if (tx.kind === "refund" && tx.status === "success") amountCents += cents;
+    amountCents += cents;
   }
   return { ok: true, value: { refundId, orderId, createdAt, amountCents, currency } };
 }
