@@ -251,6 +251,12 @@ export const createCreatorSchema = z
   .transform((c) => ({ creatorId: c.id, name: c.name, utmCampaign: c.utmCampaign ?? null, coupons: c.coupons }));
 export type NewCreator = z.output<typeof createCreatorSchema>;
 
+export const MAX_PAGE = 500;
+export const pageQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(MAX_PAGE).default(100),
+  offset: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),
+});
+
 export const creatorParamSchema = z.object({ id: creatorId });
 export const orderParamSchema = z.object({ id: shopifyId("id do pedido") });
 export const refundParamSchema = z.object({ id: shopifyId("id do estorno") });

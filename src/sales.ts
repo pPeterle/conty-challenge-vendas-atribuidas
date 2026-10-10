@@ -265,6 +265,28 @@ export function listOrderRefunds(store: Store, orderId: string) {
   };
 }
 
+export function listPendingRefunds(store: Store, page: { limit: number; offset: number }) {
+  const { total, items } = store.refundsWithStatus(["pendente"], page.limit, page.offset);
+  return { total, limit: page.limit, offset: page.offset, refunds: items.map(refundView) };
+}
+
+/** O que merece um olho humano: desempates, estornos limitados ou rejeitados e repetições divergentes. */
+export function getReview(store: Store, limit: number) {
+  const refunds = store.refundsWithStatus(["limitado", "rejeitado"], limit);
+  return {
+    tieBreakConflicts: store.tieBreakConflicts(limit).map((o) => ({
+      orderId: o.orderId,
+      creatorId: o.creatorId,
+      discardedCreatorIds: o.discardedCreatorIds,
+      reason: o.attributionReason,
+      detail: o.attributionDetail,
+      receivedAt: o.receivedAt,
+    })),
+    cappedOrRejectedRefunds: { total: refunds.total, refunds: refunds.items.map(refundView) },
+    divergentDeliveries: store.divergentDeliveries(limit),
+  };
+}
+
 export function getRefundView(store: Store, refundId: string) {
   const refund = store.getRefund(refundId);
   if (!refund) throw notFound(`estorno ${refundId} não encontrado`);

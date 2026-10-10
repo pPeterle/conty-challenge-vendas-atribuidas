@@ -15,6 +15,8 @@ import {
   ingestOrder,
   ingestRefund,
   listOrderRefunds,
+  getReview,
+  listPendingRefunds,
   logIgnoredOrder,
   logRefundWithoutConcludedTransaction,
   logRejectedDelivery,
@@ -26,6 +28,7 @@ import {
   creatorParamSchema,
   orderParamSchema,
   orderWebhookSchema,
+  pageQuerySchema,
   parseWebhookJson,
   refundParamSchema,
   refundWebhookSchema,
@@ -147,6 +150,8 @@ export function createApp({ db, clock, webhookSecret }: AppDeps) {
   app.get("/orders/:id/refunds", validate("param", orderParamSchema), (c) =>
     c.json(listOrderRefunds(store, c.req.valid("param").id)),
   );
+  app.get("/refunds/pending", validate("query", pageQuerySchema), (c) => c.json(listPendingRefunds(store, c.req.valid("query"))));
+  app.get("/review", validate("query", pageQuerySchema), (c) => c.json(getReview(store, c.req.valid("query").limit)));
   app.get("/refunds/:id", validate("param", refundParamSchema), (c) => c.json(getRefundView(store, c.req.valid("param").id)));
   app.get("/creators/summary", (c) => c.json(getSummary(store)));
   app.get("/creators/:id", validate("param", creatorParamSchema), (c) => {

@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS orders (
   webhook_id           TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS orders_by_creator ON orders(creator_id);
+CREATE INDEX IF NOT EXISTS orders_by_reason ON orders(attribution_reason);
 
 -- Um estorno por refund_id. Pode existir antes do pedido (status pendente).
 CREATE TABLE IF NOT EXISTS refunds (
@@ -58,6 +59,7 @@ CREATE TABLE IF NOT EXISTS refunds (
   CHECK ((status = 'pendente') = (applied_cents IS NULL))
 );
 CREATE INDEX IF NOT EXISTS refunds_by_order ON refunds(order_id, status);
+CREATE INDEX IF NOT EXISTS refunds_by_status ON refunds(status, received_at);
 
 -- Log de toda entrega recebida, inclusive as repetidas.
 CREATE TABLE IF NOT EXISTS webhook_deliveries (
@@ -69,6 +71,7 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
   received_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS deliveries_by_resource ON webhook_deliveries(topic, resource_id);
+CREATE INDEX IF NOT EXISTS deliveries_by_outcome ON webhook_deliveries(outcome);
 
 -- Histórico não se apaga e não se reescreve. Estas travas valem mesmo que
 -- algum código futuro tente.
@@ -245,6 +248,16 @@ export function createStore(db: DatabaseSync) {
     pendingRefundsOf: db.prepare(
       "SELECT * FROM refunds WHERE order_id = ? AND status = 'pendente' ORDER BY shop_created_at, refund_id",
     ),
+    refundsByStatus: db.prepare(
+      "SELECT * FROM refunds WHERE status IN (SELECT value FROM json_each(?)) ORDER BY received_at, refund_id LIMIT ? OFFSET ?",
+    ),
+    countByStatus: db.prepare("SELECT COUNT(*) AS n FROM refunds WHERE status IN (SELECT value FROM json_each(?))"),
+    tieBreakConflicts: db.prepare(`
+      SELECT * FROM orders WHERE attribution_reason IN ('cupom_vence_utm', 'cupons_de_criadores_diferentes')
+      ORDER BY received_at, order_id LIMIT ?`),
+    divergentDeliveries: db.prepare(
+      "SELECT webhook_id, topic, resource_id, received_at FROM webhook_deliveries WHERE outcome = 'duplicado_divergente' ORDER BY delivery_id LIMIT ?",
+    ),
     appliedSum: db.prepare("SELECT COALESCE(SUM(applied_cents), 0) AS total FROM refunds WHERE order_id = ?"),
     resolveRefund: db.prepare(
       "UPDATE refunds SET status = ?, applied_cents = ?, reason = ?, resolved_at = ? WHERE refund_id = ? AND status = 'pendente'",
@@ -336,6 +349,24 @@ export function createStore(db: DatabaseSync) {
     },
     pendingRefundsOf(orderId: string): RefundRow[] {
       return (q.pendingRefundsOf.all(orderId) as Row[]).map(toRefund);
+    },
+    refundsWithStatus(statuses: RefundStatus[], limit: number, offset = 0): { total: number; items: RefundRow[] } {
+      const list = JSON.stringify(statuses);
+      return {
+        total: num((q.countByStatus.get(list) as Row).n),
+        items: (q.refundsByStatus.all(list, limit, offset) as Row[]).map(toRefund),
+      };
+    },
+    tieBreakConflicts(limit: number): OrderRow[] {
+      return (q.tieBreakConflicts.all(limit) as Row[]).map(toOrder);
+    },
+    divergentDeliveries(limit: number) {
+      return (q.divergentDeliveries.all(limit) as Row[]).map((r) => ({
+        webhookId: str(r.webhook_id),
+        topic: str(r.topic),
+        resourceId: str(r.resource_id),
+        receivedAt: str(r.received_at),
+      }));
     },
     appliedRefundCents(orderId: string): number {
       return num((q.appliedSum.get(orderId) as Row).total);
