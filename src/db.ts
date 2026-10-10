@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS orders (
   attribution_method   TEXT CHECK (attribution_method IN ('cupom', 'utm')),
   attribution_reason   TEXT NOT NULL,
   attribution_detail   TEXT NOT NULL,
+  -- JSON com os criadores que perderam o desempate (ex.: dono da UTM quando o cupom venceu)
+  discarded_creator_ids TEXT NOT NULL DEFAULT '[]',
   shop_created_at      TEXT NOT NULL,
   received_at          TEXT NOT NULL,
   webhook_id           TEXT NOT NULL
@@ -99,6 +101,11 @@ export function openDatabase(path: string): DatabaseSync {
   db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
   if (path !== ":memory:") db.exec("PRAGMA journal_mode = WAL;");
   db.exec(SCHEMA);
+  // Banco criado antes desta coluna existir: adiciona sem perder dados.
+  const columns = (db.prepare("PRAGMA table_info(orders)").all() as Array<{ name: string }>).map((c) => c.name);
+  if (!columns.includes("discarded_creator_ids")) {
+    db.exec("ALTER TABLE orders ADD COLUMN discarded_creator_ids TEXT NOT NULL DEFAULT '[]'");
+  }
   return db;
 }
 
@@ -124,12 +131,14 @@ export interface OrderRow {
   attributionMethod: string | null;
   attributionReason: string;
   attributionDetail: string;
+  discardedCreatorIds: string[];
   shopCreatedAt: string;
   receivedAt: string;
   webhookId: string;
 }
 
-export interface NewOrder extends Omit<OrderRow, "creatorId" | "attributionMethod" | "attributionReason" | "attributionDetail"> {
+export interface NewOrder
+  extends Omit<OrderRow, "creatorId" | "attributionMethod" | "attributionReason" | "attributionDetail" | "discardedCreatorIds"> {
   attribution: Attribution;
 }
 
@@ -180,6 +189,7 @@ function toOrder(r: Row): OrderRow {
     attributionMethod: strOrNull(r.attribution_method),
     attributionReason: str(r.attribution_reason),
     attributionDetail: str(r.attribution_detail),
+    discardedCreatorIds: JSON.parse(str(r.discarded_creator_ids)) as string[],
     shopCreatedAt: str(r.shop_created_at),
     receivedAt: str(r.received_at),
     webhookId: str(r.webhook_id),
@@ -222,8 +232,8 @@ export function createStore(db: DatabaseSync) {
     insertOrder: db.prepare(`
       INSERT INTO orders (order_id, total_cents, currency, financial_status, discount_codes, landing_site,
         utm_source, utm_medium, utm_campaign, creator_id, attribution_method, attribution_reason,
-        attribution_detail, shop_created_at, received_at, webhook_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        attribution_detail, discarded_creator_ids, shop_created_at, received_at, webhook_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (order_id) DO NOTHING`),
     orderById: db.prepare("SELECT * FROM orders WHERE order_id = ?"),
     insertRefund: db.prepare(`
@@ -301,7 +311,7 @@ export function createStore(db: DatabaseSync) {
         q.insertOrder.run(
           o.orderId, o.totalCents, o.currency, o.financialStatus, JSON.stringify(o.discountCodes), o.landingSite,
           o.utmSource, o.utmMedium, o.utmCampaign, a.creatorId, a.method, a.reason, a.detail,
-          o.shopCreatedAt, o.receivedAt, o.webhookId,
+          JSON.stringify(a.discardedCreatorIds), o.shopCreatedAt, o.receivedAt, o.webhookId,
         ).changes === 1
       );
     },

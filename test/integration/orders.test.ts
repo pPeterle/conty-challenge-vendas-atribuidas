@@ -61,8 +61,11 @@ describe("webhook de pedido", () => {
       method: "cupom",
       reason: "cupom_vence_utm",
       detail: "cupom ana10 venceu a UTM bruno (bruno)",
+      discardedCreatorIds: ["bruno"],
       status: "ativa",
     });
+    const row = ctx.db.prepare("SELECT discarded_creator_ids FROM orders WHERE order_id = '1001'").get() as { discarded_creator_ids: string };
+    expect(JSON.parse(row.discarded_creator_ids)).toEqual(["bruno"]);
   });
 
   it("cupom desconhecido cai para a UTM", async () => {

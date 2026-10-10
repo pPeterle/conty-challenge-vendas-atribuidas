@@ -182,6 +182,7 @@ export function getOrderView(store: Store, orderId: string) {
       method: order.attributionMethod,
       reason: order.attributionReason,
       detail: order.attributionDetail,
+      discardedCreatorIds: order.discardedCreatorIds,
       status: attributionStatus(order.creatorId, order.totalCents, refundedCents),
     },
     refunds: refunds.map(refundView),

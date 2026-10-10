@@ -33,12 +33,12 @@ describe("attribute (regra de atribuição)", () => {
 
   it("desempate: cupom e UTM de criadores diferentes, o cupom vence", () => {
     const result = attribute(input(["ana10"], "conty", "bruno"), directory);
-    expect(result).toMatchObject({ creatorId: "ana", method: "cupom", reason: "cupom_vence_utm" });
+    expect(result).toMatchObject({ creatorId: "ana", method: "cupom", reason: "cupom_vence_utm", discardedCreatorIds: ["bruno"] });
     expect(result.detail).toContain("bruno");
   });
 
   it("cupom e UTM do mesmo criador não é conflito", () => {
-    expect(attribute(input(["ana10"], "conty", "ana"), directory).reason).toBe("cupom");
+    expect(attribute(input(["ana10"], "conty", "ana"), directory)).toMatchObject({ reason: "cupom", discardedCreatorIds: [] });
   });
 
   it("cupom desconhecido cai para a UTM", () => {
@@ -49,7 +49,7 @@ describe("attribute (regra de atribuição)", () => {
 
   it("dois cupons de criadores diferentes: vence o primeiro na ordem enviada", () => {
     const result = attribute(input(["bruno15", "ana10"]), directory);
-    expect(result).toMatchObject({ creatorId: "bruno", reason: "cupons_de_criadores_diferentes" });
+    expect(result).toMatchObject({ creatorId: "bruno", reason: "cupons_de_criadores_diferentes", discardedCreatorIds: ["ana"] });
     expect(result.detail).toContain("ana10");
   });
 
@@ -65,6 +65,7 @@ describe("attribute (regra de atribuição)", () => {
       method: null,
       reason: "sem_criador",
       detail: "cupons sem criador: frete; UTM sem criador: conty/desconhecido",
+      discardedCreatorIds: [],
     });
   });
 });
