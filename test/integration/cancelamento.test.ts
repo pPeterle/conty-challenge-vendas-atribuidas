@@ -41,6 +41,12 @@ describe("cancelamento de pedido", () => {
     const view = (await ctx.getJson("/orders/1001")).body;
     expect(view).toMatchObject({ refundedCents: 10000, netCents: 0 });
     expect(view.refunds.filter((r: any) => r.kind === "cancelamento")).toHaveLength(1);
+    expect(view.deliveries.map((d: any) => [d.topic, d.outcome])).toEqual([
+      ["orders/paid", "criado"],
+      ["orders/cancelled", "cancelado"],
+      ["orders/cancelled", "duplicado"],
+      ["orders/paid", "duplicado"],
+    ]);
   });
 
   it("financial_status voided também cancela, e a rota orders/cancelled aceita o mesmo payload", async () => {

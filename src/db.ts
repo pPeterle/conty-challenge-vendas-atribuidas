@@ -266,7 +266,7 @@ export function createStore(db: DatabaseSync) {
       "INSERT INTO webhook_deliveries (webhook_id, topic, resource_id, outcome, received_at) VALUES (?, ?, ?, ?, ?)",
     ),
     deliveriesOf: db.prepare(
-      "SELECT webhook_id, topic, outcome, received_at FROM webhook_deliveries WHERE resource_id = ? AND topic = ? ORDER BY delivery_id",
+      "SELECT delivery_id, webhook_id, topic, outcome, received_at FROM webhook_deliveries WHERE resource_id = ? AND topic = ? ORDER BY delivery_id",
     ),
     summary: db.prepare(`
       SELECT t.creator_id, c.name AS creator_name, t.currency, COUNT(*) AS orders,
@@ -381,6 +381,7 @@ export function createStore(db: DatabaseSync) {
     },
     deliveriesOf(topic: string, resourceId: string) {
       return (q.deliveriesOf.all(resourceId, topic) as Row[]).map((r) => ({
+        deliveryId: num(r.delivery_id),
         webhookId: str(r.webhook_id),
         outcome: str(r.outcome),
         receivedAt: str(r.received_at),

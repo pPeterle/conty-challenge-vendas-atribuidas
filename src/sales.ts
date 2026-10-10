@@ -250,7 +250,10 @@ export function getOrderView(store: Store, orderId: string) {
       status: attributionStatus(order.creatorId, order.totalCents, refundedCents, cancellation !== undefined),
     },
     refunds: refunds.map(refundView),
-    deliveries: store.deliveriesOf("orders/paid", orderId),
+    deliveries: (["orders/paid", "orders/cancelled"] as const)
+      .flatMap((topic) => store.deliveriesOf(topic, orderId).map(({ deliveryId, ...d }) => ({ deliveryId, topic, ...d })))
+      .sort((x, y) => x.deliveryId - y.deliveryId)
+      .map(({ deliveryId: _id, ...d }) => d),
   };
 }
 
@@ -290,7 +293,8 @@ export function getReview(store: Store, limit: number) {
 export function getRefundView(store: Store, refundId: string) {
   const refund = store.getRefund(refundId);
   if (!refund) throw notFound(`estorno ${refundId} não encontrado`);
-  return { ...refundView(refund), deliveries: store.deliveriesOf("refunds/create", refundId) };
+  const deliveries = store.deliveriesOf("refunds/create", refundId).map(({ deliveryId: _id, ...d }) => d);
+  return { ...refundView(refund), deliveries };
 }
 
 export function getSummary(store: Store) {
