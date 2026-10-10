@@ -15,15 +15,14 @@ afterEach(() => {
 });
 
 function startWriter(path: string, refunds: RefundPayload[], gate: SharedArrayBuffer) {
-  const worker = new Worker(new URL("./workers/refund-writer.ts", import.meta.url), {
-    workerData: { path, refunds, gate },
-    execArgv: ["--import", "tsx"],
-  });
-  const ready = new Promise<void>((resolve) => worker.once("message", () => resolve()));
-  const done = new Promise<string[]>((resolve, reject) => {
-    worker.on("message", (m) => Array.isArray(m) && resolve(m));
+  const worker = new Worker(new URL("./workers/refund-writer.mjs", import.meta.url), { workerData: { path, refunds, gate } });
+  const failed = new Promise<never>((_, reject) => {
     worker.on("error", reject);
+    worker.on("exit", (code) => reject(new Error(`worker saiu antes de terminar (código ${code})`)));
   });
+  const ready = Promise.race([new Promise<void>((resolve) => worker.once("message", () => resolve())), failed]);
+  const done = Promise.race([new Promise<string[]>((resolve) => worker.on("message", (m) => Array.isArray(m) && resolve(m))), failed]);
+  failed.catch(() => {});
   return { worker, ready, done };
 }
 
