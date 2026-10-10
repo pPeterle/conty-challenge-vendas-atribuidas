@@ -24,6 +24,7 @@ import {
   creatorParamSchema,
   orderParamSchema,
   orderWebhookSchema,
+  parseWebhookJson,
   refundParamSchema,
   refundWebhookSchema,
   toValidationError,
@@ -70,7 +71,7 @@ export function createApp({ db, clock, webhookSecret }: AppDeps) {
   async function parseWebhook<S extends ZodSchema>(raw: string, schema: S, topic: string, webhookId: string) {
     let body: unknown;
     try {
-      body = JSON.parse(raw);
+      body = parseWebhookJson(raw);
     } catch {
       logRejectedDelivery(store, clock, { topic, webhookId, body: undefined, message: "corpo não é JSON válido" });
       throw validation("corpo não é JSON válido");

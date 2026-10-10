@@ -135,6 +135,24 @@ describe("webhook de pedido", () => {
     expect((await ctx.getJson("/creators/summary")).body.creators[0]).toMatchObject({ orders: 1, grossCents: 0, refundedCents: 0, netCents: 0 });
   });
 
+  it("ids acima de 2^53 (como os reais da Shopify) não perdem precisão nem colidem", async () => {
+    const ctx = await setupWithCreators();
+    // os dois viram o mesmo número em ponto flutuante; como texto são pedidos diferentes
+    const a = '{"id":820982911946154508,"total_price":"10.00","currency":"BRL","financial_status":"paid","created_at":"2026-03-01T09:00:00Z"}';
+    const b = a.replace("820982911946154508", "820982911946154509");
+    expect(JSON.parse(a).id).toBe(JSON.parse(b).id);
+    expect((await ctx.sendRaw("/webhooks/shopify/orders", a)).status).toBe(201);
+    expect((await ctx.sendRaw("/webhooks/shopify/orders", b)).status).toBe(201);
+    expect((await ctx.getJson("/orders/820982911946154508")).body.orderId).toBe("820982911946154508");
+    expect((await ctx.getJson("/orders/820982911946154509")).body.orderId).toBe("820982911946154509");
+
+    const r = '{"id":990000000000000001,"order_id":820982911946154509,"created_at":"2026-03-02T09:00:00Z","transactions":[{"amount":"4.00","kind":"refund","status":"success"}]}';
+    const res = await ctx.sendRaw("/webhooks/shopify/refunds", r);
+    expect(((await res.json()) as any).refund).toMatchObject({ refundId: "990000000000000001", orderId: "820982911946154509", status: "aplicado" });
+    expect((await ctx.getJson("/orders/820982911946154508")).body.refundedCents).toBe(0);
+    expect((await ctx.getJson("/orders/820982911946154509")).body.refundedCents).toBe(400);
+  });
+
   it("id 123 e \"0123\" são o mesmo pedido; id 0 é recusado", async () => {
     const ctx = await setupWithCreators();
     expect((await ctx.sendOrder(order({ id: 123 }))).status).toBe(201);

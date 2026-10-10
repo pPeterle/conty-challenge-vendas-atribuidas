@@ -24,10 +24,19 @@ export function setup() {
     return app.request(path, { method: "POST", headers, body });
   };
 
+  /** Corpo cru assinado, para payloads que não sobrevivem a JSON.stringify (ids grandes). */
+  const sendRaw = (path: string, body: string, webhookId = `wh-${++webhookSeq}`) =>
+    app.request(path, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-shopify-webhook-id": webhookId, "x-shopify-hmac-sha256": signBody(body, SECRET) },
+      body,
+    });
+
   return {
     app,
     db,
     clock,
+    sendRaw,
     sendOrder: (payload: unknown, opts?: Parameters<typeof send>[2]) => send("/webhooks/shopify/orders", payload, opts),
     sendRefund: (payload: unknown, opts?: Parameters<typeof send>[2]) => send("/webhooks/shopify/refunds", payload, opts),
     createCreator: (body: unknown) =>

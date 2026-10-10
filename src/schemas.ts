@@ -75,6 +75,19 @@ export function toValidationError(error: z.ZodError): AppError {
 
 const text = (max: number) => z.string().trim().min(1).max(max);
 
+const ID_KEYS = new Set(["id", "order_id"]);
+
+/**
+ * JSON.parse que preserva o texto original de `id` e `order_id`. Ids da Shopify
+ * passam de 2^53; como número JS eles perdem precisão e dois pedidos vizinhos
+ * colidiriam. O reviver recebe o trecho original em `context.source` (Node >= 22).
+ */
+export function parseWebhookJson(raw: string): unknown {
+  const reviver = (key: string, value: unknown, context?: { source?: string }) =>
+    ID_KEYS.has(key) && typeof value === "number" && context?.source && /^\d+$/.test(context.source) ? context.source : value;
+  return JSON.parse(raw, reviver as (key: string, value: unknown) => unknown);
+}
+
 /**
  * Ids da Shopify são inteiros grandes; guardamos como texto canônico, para que
  * 123 e "0123" sejam o mesmo pedido. Zero e negativo são recusados.
