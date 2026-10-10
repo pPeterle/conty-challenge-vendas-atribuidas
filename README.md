@@ -100,7 +100,7 @@ Com várias instâncias, eu trocaria o sqlite por Postgres e manteria a ideia: `
 
 ## Teste de carga
 
-O k6 entrega 600 pedidos e 750 estornos, cada um 8 vezes, em ordem embaralhada e em pares simultâneos, com 10% de payloads inválidos no meio. No fim, um script confere o resumo por criador contra o esperado e confirma que nenhum pedido tem estorno acima do total. Na última execução, nesta máquina: checks 100% (12000/12000), 0% de falhas, p95 de 59 ms e 2972 req/s, com as invariantes mantidas. O cenário completo e a saída estão em [docs/carga.md](docs/carga.md).
+O k6 entrega 600 pedidos e 750 estornos, cada um 8 vezes, em ordem embaralhada e em pares simultâneos, com 10% de payloads inválidos no meio. No fim, um script confere o resumo por criador contra o esperado e confirma que nenhum pedido tem estorno acima do total. Na última execução, nesta máquina: checks 100% (12000/12000), 0% de falhas, p95 de 24,5 ms e 5311 req/s, com as invariantes mantidas. O cenário completo e a saída estão em [docs/carga.md](docs/carga.md).
 
 ## O que ficou de fora
 

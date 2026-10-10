@@ -14,16 +14,16 @@ Para o k6 importar a massa compartilhada, monto a pasta `load/` no container (`-
 
 ## Resultado
 
-Execução de 2026-10-10 nesta máquina (macOS, k6 em Docker):
+Execução de 2026-10-10 nesta máquina (macOS, k6 em Docker, load average perto de 8):
 
 ```
 ✓ inválido volta 4xx
 ✓ inválido nunca 5xx
 ✓ status 200 ou 201
 ✓ checks.........................: 100.00% 12000 out of 12000
-✓ http_req_duration..............: avg=27.63ms  min=643.92µs med=21.21ms max=880.34ms p(90)=43.15ms p(95)=58.75ms
+✓ http_req_duration..............: avg=14.94ms  min=662.21µs med=12.81ms max=646.84ms p(90)=19.53ms p(95)=24.51ms
 ✓ http_req_failed................: 0.00%   0 out of 11405
-http_reqs......................: 11405   2972.06905/s
+http_reqs......................: 11405   5310.557691/s
 ok   criador-0: esperado {"orders":96,"grossCents":2396576,"refundedCents":1318654,"netCents":1077922} obtido {"orders":96,"grossCents":2396576,"refundedCents":1318654,"netCents":1077922}
 ok   criador-1: esperado {"orders":96,"grossCents":2424696,"refundedCents":1312230,"netCents":1112466} obtido {"orders":96,"grossCents":2424696,"refundedCents":1312230,"netCents":1112466}
 ok   criador-2: esperado {"orders":96,"grossCents":2405416,"refundedCents":1344846,"netCents":1060570} obtido {"orders":96,"grossCents":2405416,"refundedCents":1344846,"netCents":1060570}
@@ -39,4 +39,4 @@ entregas registradas: 11100, duplicadas: 9450, divergentes: 0, recusadas por pay
 VERIFICAÇÃO OK: invariantes mantidas
 ```
 
-A latência muda bastante entre execuções na mesma máquina: nas últimas rodadas, o p95 ficou entre 26 ms e 117 ms. A ordem de envio é fixa, mas 50 VUs disputam as iterações ao mesmo tempo, então a ordem de chegada muda a cada execução. Por isso a contagem de estornos que chegaram antes do pedido varia (já vi de 374 a 381). Os totais por criador e as invariantes não variam.
+A latência muda bastante entre execuções na mesma máquina: nas últimas rodadas, o p95 ficou entre 24 ms e 117 ms. A ordem de envio é fixa, mas 50 VUs disputam as iterações ao mesmo tempo, então a ordem de chegada muda a cada execução. Por isso a contagem de estornos que chegaram antes do pedido varia (já vi de 374 a 381). Os totais por criador e as invariantes não variam.
