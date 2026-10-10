@@ -1,0 +1,26 @@
+{
+  "name": "conty-challenge-vendas-atribuidas",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "NODE_OPTIONS='--disable-warning=ExperimentalWarning' tsx watch src/index.ts",
+    "start": "NODE_OPTIONS='--disable-warning=ExperimentalWarning' tsx src/index.ts",
+    "seed": "NODE_OPTIONS='--disable-warning=ExperimentalWarning' tsx scripts/seed.ts",
+    "test": "NODE_OPTIONS='--disable-warning=ExperimentalWarning' vitest run",
+    "typecheck": "tsc --noEmit",
+    "load": "bash scripts/load.sh"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.6",
+    "hono": "^4.10.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
