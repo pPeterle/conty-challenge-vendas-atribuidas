@@ -14,16 +14,16 @@ Para o k6 importar a massa compartilhada, monto a pasta `load/` no container (`-
 
 ## Resultado
 
-Execução de 2026-10-10 nesta máquina (macOS, k6 em Docker, load average perto de 8):
+Execução de 2026-10-10 nesta máquina (macOS, k6 em Docker, load average perto de 10):
 
 ```
 ✓ inválido volta 4xx
 ✓ inválido nunca 5xx
 ✓ status 200 ou 201
 ✓ checks.........................: 100.00% 12000 out of 12000
-✓ http_req_duration..............: avg=14.94ms  min=662.21µs med=12.81ms max=646.84ms p(90)=19.53ms p(95)=24.51ms
+✓ http_req_duration..............: avg=15.48ms  min=509.71µs med=12.94ms max=745.72ms p(90)=19.46ms p(95)=23.55ms
 ✓ http_req_failed................: 0.00%   0 out of 11405
-http_reqs......................: 11405   5310.557691/s
+http_reqs......................: 11405   5193.551868/s
 ok   criador-0: esperado {"orders":96,"grossCents":2396576,"refundedCents":1318654,"netCents":1077922} obtido {"orders":96,"grossCents":2396576,"refundedCents":1318654,"netCents":1077922}
 ok   criador-1: esperado {"orders":96,"grossCents":2424696,"refundedCents":1312230,"netCents":1112466} obtido {"orders":96,"grossCents":2424696,"refundedCents":1312230,"netCents":1112466}
 ok   criador-2: esperado {"orders":96,"grossCents":2405416,"refundedCents":1344846,"netCents":1060570} obtido {"orders":96,"grossCents":2405416,"refundedCents":1344846,"netCents":1060570}
@@ -32,11 +32,11 @@ ok   criador-4: esperado {"orders":96,"grossCents":2559656,"refundedCents":14299
 ok   (sem criador): esperado {"orders":120,"grossCents":3115420,"refundedCents":1724990,"netCents":1390430} obtido {"orders":120,"grossCents":3115420,"refundedCents":1724990,"netCents":1390430}
 pedidos gravados: 600 (esperado 600)
 estornos gravados: 750 (esperado 750), pendentes no fim: 0
-estornos que chegaram antes do pedido: 379
+estornos que chegaram antes do pedido: 378
 estornos limitados ou rejeitados por passar do total: 150
 pedidos com estorno acima do total: 0
 entregas registradas: 11100, duplicadas: 9450, divergentes: 0, recusadas por payload inválido: 300
 VERIFICAÇÃO OK: invariantes mantidas
 ```
 
-A latência muda bastante entre execuções na mesma máquina: nas últimas rodadas, o p95 ficou entre 24 ms e 117 ms. A ordem de envio é fixa, mas 50 VUs disputam as iterações ao mesmo tempo, então a ordem de chegada muda a cada execução. Por isso a contagem de estornos que chegaram antes do pedido varia (já vi de 374 a 381). Os totais por criador e as invariantes não variam.
+A latência muda bastante entre execuções na mesma máquina: nas últimas rodadas, o p95 ficou entre 23 ms e 117 ms. A ordem de envio é fixa, mas 50 VUs disputam as iterações ao mesmo tempo, então a ordem de chegada muda a cada execução. Por isso a contagem de estornos que chegaram antes do pedido varia (já vi de 374 a 381). Os totais por criador e as invariantes não variam.

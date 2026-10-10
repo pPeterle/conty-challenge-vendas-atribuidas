@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import pino from "pino";
+import { describe, expect, it } from "vitest";
 import { signBody } from "../../src/shopify.ts";
 import { order, refund, SECRET, setup, setupWithCreators } from "./helpers.ts";
 
@@ -243,14 +244,15 @@ describe("payloads inválidos devolvem 4xx com o erro padrão e não gravam nada
     }
   });
 
-  it("erro inesperado vira 500 JSON genérico, sem stack trace", async () => {
-    const ctx = await setupWithCreators();
-    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+  it("erro inesperado vira 500 JSON genérico, sem stack trace, e o erro vai para o logger", async () => {
+    const lines: string[] = [];
+    const ctx = setup(pino({ level: "info" }, { write: (line: string) => void lines.push(line) }));
     ctx.db.close();
     const res = await ctx.app.request("/creators/summary");
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: { code: "INTERNAL_ERROR", message: "erro interno" } });
-    expect(log).toHaveBeenCalled();
-    log.mockRestore();
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!)).toMatchObject({ level: 50, msg: "erro inesperado", method: "GET", path: "/creators/summary", err: { type: "Error" } });
   });
+
 });

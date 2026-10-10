@@ -2,16 +2,17 @@ import { DatabaseSync } from "node:sqlite";
 import { createApp } from "../../src/app.ts";
 import { FixedClock } from "../../src/clock.ts";
 import { openDatabase } from "../../src/db.ts";
+import type { Logger } from "../../src/logger.ts";
 import { signBody } from "../../src/shopify.ts";
 
 export const SECRET = "segredo-de-teste";
 
 let webhookSeq = 0;
 
-export function setup() {
+export function setup(logger?: Logger) {
   const db: DatabaseSync = openDatabase(":memory:");
   const clock = new FixedClock("2026-03-01T12:00:00.000Z");
-  const app = createApp({ db, clock, webhookSecret: SECRET });
+  const app = createApp({ db, clock, webhookSecret: SECRET, logger });
 
   const send = (path: string, payload: unknown, opts: { webhookId?: string; signature?: string | null } = {}) => {
     const body = JSON.stringify(payload);

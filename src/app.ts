@@ -7,6 +7,7 @@ import type { ZodSchema } from "zod";
 import type { Clock } from "./clock.ts";
 import { createStore } from "./db.ts";
 import { AppError, notFound, validation } from "./errors.ts";
+import { silentLogger, type Logger } from "./logger.ts";
 import {
   cancelOrder,
   getOrderView,
@@ -42,6 +43,8 @@ export interface AppDeps {
   clock: Clock;
   /** Segredo compartilhado com a loja para conferir o X-Shopify-Hmac-Sha256. */
   webhookSecret: string;
+  /** Padrão: logger silencioso (testes). O servidor passa o de `createLogger`. */
+  logger?: Logger;
 }
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -59,7 +62,7 @@ const requireJsonContentType: MiddlewareHandler = async (c, next) => {
   await next();
 };
 
-export function createApp({ db, clock, webhookSecret }: AppDeps) {
+export function createApp({ db, clock, webhookSecret, logger = silentLogger }: AppDeps) {
   const store = createStore(db);
   const app = new Hono();
 
@@ -95,7 +98,7 @@ export function createApp({ db, clock, webhookSecret }: AppDeps) {
     if (err instanceof HTTPException && err.status === 400) {
       return c.json({ error: { code: "VALIDATION_ERROR", message: "corpo não é JSON válido" } }, 400);
     }
-    console.error(err);
+    logger.error({ err, method: c.req.method, path: c.req.path }, "erro inesperado");
     return c.json({ error: { code: "INTERNAL_ERROR", message: "erro interno" } }, 500);
   });
   app.notFound((c) => c.json({ error: { code: "NOT_FOUND", message: "rota não encontrada" } }, 404));

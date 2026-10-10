@@ -34,7 +34,7 @@ npm run typecheck
 npm run load        # k6 via Docker na porta 3103 + verificação das invariantes
 ```
 
-Sem `WEBHOOK_SECRET`, o servidor usa um segredo de desenvolvimento e avisa no log. A CI roda testes e typecheck em Node 22.13 e 24.
+Sem `WEBHOOK_SECRET`, o servidor usa um segredo de desenvolvimento e avisa no log. Os logs saem em JSON pelo pino, com transporte em worker thread (`pino/file` no stdout); `LOG_LEVEL` muda o nível (padrão `info`; nos testes o logger é silencioso). A CI roda testes e typecheck em Node 22.13 e 24.
 
 ## Endpoints
 
@@ -52,7 +52,7 @@ Sem `WEBHOOK_SECRET`, o servidor usa um segredo de desenvolvimento e avisa no lo
 | POST | `/creators` | cadastra criador com `utmCampaign` e `coupons` |
 | GET | `/creators/:id` | criador cadastrado |
 
-Erros saem como `{ "error": { "code", "message", "details"? } }`. Os status são 400 (validação, com `path` e `message` de cada campo em `details`), 401 (assinatura), 404, 409 (cupom ou UTM de outro criador), 413 (corpo acima de 1 MB) e 500 genérico, sem stack trace. Nos webhooks, 400 e 401 são recusa: a Shopify trata resposta fora de 2xx como falha e reenvia. A entrega recusada por payload inválido fica em `webhook_deliveries` como `recusado: <motivo>`.
+Erros saem como `{ "error": { "code", "message", "details"? } }`. Os status são 400 (validação, com `path` e `message` de cada campo em `details`), 401 (assinatura), 404, 409 (cupom ou UTM de outro criador), 413 (corpo acima de 1 MB) e 500 genérico, sem stack trace (o erro completo vai para o log). Nos webhooks, 400 e 401 são recusa: a Shopify trata resposta fora de 2xx como falha e reenvia. A entrega recusada por payload inválido fica em `webhook_deliveries` como `recusado: <motivo>`.
 
 Exemplos reais de request e response estão em [docs/exemplos.md](docs/exemplos.md).
 
@@ -100,7 +100,7 @@ Com várias instâncias, eu trocaria o sqlite por Postgres e manteria a ideia: `
 
 ## Teste de carga
 
-O k6 entrega 600 pedidos e 750 estornos, cada um 8 vezes, em ordem embaralhada e em pares simultâneos, com 10% de payloads inválidos no meio. No fim, um script confere o resumo por criador contra o esperado e confirma que nenhum pedido tem estorno acima do total. Na última execução, nesta máquina: checks 100% (12000/12000), 0% de falhas, p95 de 24,5 ms e 5311 req/s, com as invariantes mantidas. O cenário completo e a saída estão em [docs/carga.md](docs/carga.md).
+O k6 entrega 600 pedidos e 750 estornos, cada um 8 vezes, em ordem embaralhada e em pares simultâneos, com 10% de payloads inválidos no meio. No fim, um script confere o resumo por criador contra o esperado e confirma que nenhum pedido tem estorno acima do total. Na última execução, nesta máquina: checks 100% (12000/12000), 0% de falhas, p95 de 23,6 ms e 5194 req/s, com as invariantes mantidas. O cenário completo e a saída estão em [docs/carga.md](docs/carga.md).
 
 ## O que ficou de fora
 
