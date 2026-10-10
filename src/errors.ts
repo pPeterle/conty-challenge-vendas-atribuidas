@@ -1,12 +1,22 @@
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 
+export interface ErrorDetail {
+  path: string;
+  message: string;
+}
+
 export class AppError extends Error {
   constructor(
     readonly status: ContentfulStatusCode,
     readonly code: string,
     message: string,
+    readonly details?: ErrorDetail[],
   ) {
     super(message);
+  }
+
+  toBody() {
+    return { error: { code: this.code, message: this.message, ...(this.details ? { details: this.details } : {}) } };
   }
 }
 

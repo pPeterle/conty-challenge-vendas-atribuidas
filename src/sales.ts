@@ -7,9 +7,9 @@ import type { Clock } from "./clock.ts";
 import type { OrderRow, RefundRow, Store } from "./db.ts";
 import { conflict, notFound } from "./errors.ts";
 import { attributionStatus, decideRefund } from "./refunds.ts";
-import type { OrderPayload, RefundPayload } from "./shopify.ts";
+import type { NewCreator, OrderPayload, RefundPayload } from "./schemas.ts";
 
-export type IngestResult = "criado" | "duplicado";
+export type IngestResult = "criado" | "duplicado" | "duplicado_divergente";
 
 /** Ordem cronológica real: compara o instante, não a string (fusos podem vir misturados). */
 function byShopInstant(a: RefundRow, b: RefundRow): number {
@@ -64,7 +64,10 @@ export function ingestOrder(store: Store, clock: Clock, payload: OrderPayload, w
       receivedAt: now,
       webhookId,
     });
-    const result: IngestResult = inserted ? "criado" : "duplicado";
+    const existing = inserted ? null : store.getOrder(payload.orderId)!;
+    // Repetição com outro conteúdo não muda nada, mas fica marcada no log para investigar.
+    const diverges = existing !== null && (existing.totalCents !== payload.totalCents || existing.currency !== payload.currency);
+    const result: IngestResult = inserted ? "criado" : diverges ? "duplicado_divergente" : "duplicado";
     if (inserted) {
       // Estornos que chegaram antes do pedido são aplicados aqui, na mesma transação.
       const order = store.getOrder(payload.orderId)!;
@@ -95,7 +98,7 @@ export function logRejectedDelivery(
   store.logDelivery({
     webhookId: d.webhookId,
     topic: d.topic,
-    resourceId: typeof id === "string" || typeof id === "number" ? String(id) : "?",
+    resourceId: typeof id === "string" || typeof id === "number" ? String(id).slice(0, 64) : "?",
     outcome: `recusado: ${d.message}`,
     receivedAt: clock.now().toISOString(),
   });
@@ -118,17 +121,16 @@ export function ingestRefund(store: Store, clock: Clock, payload: RefundPayload,
       // Sem pedido ainda: o estorno fica pendente até o pedido chegar.
       if (order) applyRefund(store, order, store.getRefund(payload.refundId)!, now);
     }
-    const result: IngestResult = inserted ? "criado" : "duplicado";
+    const existing = inserted ? null : store.getRefund(payload.refundId)!;
+    const diverges =
+      existing !== null &&
+      (existing.orderId !== payload.orderId ||
+        existing.requestedCents !== payload.amountCents ||
+        existing.currency !== payload.currency);
+    const result: IngestResult = inserted ? "criado" : diverges ? "duplicado_divergente" : "duplicado";
     store.logDelivery({ webhookId, topic: "refunds/create", resourceId: payload.refundId, outcome: result, receivedAt: now });
     return result;
   });
-}
-
-export interface NewCreator {
-  creatorId: string;
-  name: string;
-  utmCampaign: string | null;
-  coupons: string[];
 }
 
 export function registerCreator(store: Store, clock: Clock, input: NewCreator) {

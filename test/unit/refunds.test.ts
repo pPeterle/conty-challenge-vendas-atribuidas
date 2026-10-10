@@ -21,6 +21,10 @@ describe("decideRefund", () => {
     expect(d.reason).not.toBeNull();
   });
 
+  it("estorno de valor zero é rejeitado com motivo", () => {
+    expect(decideRefund({ ...base, requestedCents: 0 })).toMatchObject({ status: "rejeitado", appliedCents: 0 });
+  });
+
   it("estorno em outra moeda é rejeitado", () => {
     expect(decideRefund({ ...base, refundCurrency: "USD", requestedCents: 100 }).status).toBe("rejeitado");
   });

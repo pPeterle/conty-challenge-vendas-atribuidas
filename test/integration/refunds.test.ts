@@ -131,11 +131,13 @@ describe("webhook de estorno", () => {
     expect(view.body.refunds.every((r: any) => r.status === "aplicado")).toBe(true);
   });
 
-  it("transação com falha não conta como valor estornado", async () => {
+  it("estorno só com transação com falha é rejeitado com motivo e não muda o líquido", async () => {
     const ctx = await setupWithCreators();
     await ctx.sendOrder(order());
     await ctx.sendRefund(refund(1, "50.00", { transactions: [{ amount: "50.00", kind: "refund", status: "failure" }] }));
-    expect((await ctx.getJson("/refunds/1")).body).toMatchObject({ status: "aplicado", requestedCents: 0, appliedCents: 0 });
+    const view = (await ctx.getJson("/refunds/1")).body;
+    expect(view).toMatchObject({ status: "rejeitado", requestedCents: 0, appliedCents: 0 });
+    expect(view.reason).toContain("nenhuma transação de refund com sucesso");
     expect((await ctx.getJson("/orders/1001")).body.netCents).toBe(10000);
   });
 
@@ -151,6 +153,17 @@ describe("webhook de estorno", () => {
     expect(() =>
       ctx.db.prepare("UPDATE refunds SET status = 'aplicado', applied_cents = 99999 WHERE refund_id = 'x'").run(),
     ).toThrow(/passaria do total/);
+  });
+
+  it("estorno repetido com outro valor não muda nada e fica marcado como duplicado_divergente", async () => {
+    const ctx = await setupWithCreators();
+    await ctx.sendOrder(order());
+    await ctx.sendRefund(refund(1, "30.00"));
+    const res = await ctx.sendRefund(refund(1, "90.00"));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as any).result).toBe("duplicado_divergente");
+    expect((await ctx.getJson("/orders/1001")).body.refundedCents).toBe(3000);
+    expect((await ctx.getJson("/refunds/1")).body.deliveries.map((d: any) => d.outcome)).toEqual(["criado", "duplicado_divergente"]);
   });
 
   it("GET de estorno ou pedido inexistente devolve 404", async () => {

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseOrderPayload, parseRefundPayload, parseUtms, signBody, verifyHmac } from "../../src/shopify.ts";
+import { orderWebhookSchema, parseUtms, refundWebhookSchema } from "../../src/schemas.ts";
+import { signBody, verifyHmac } from "../../src/shopify.ts";
+
+const parseOrderPayload = (body: unknown) => orderWebhookSchema.safeParse(body);
+const parseRefundPayload = (body: unknown) => refundWebhookSchema.safeParse(body);
 
 describe("payload de pedido", () => {
   it("extrai o essencial e as UTMs do landing_site", () => {
@@ -12,7 +16,7 @@ describe("payload de pedido", () => {
       discount_codes: [{ code: "ANA10", amount: "10.00", type: "percentage" }],
       landing_site: "/produtos/x?utm_source=conty&utm_medium=video&utm_campaign=ana",
     });
-    expect(parsed.ok && parsed.value).toMatchObject({
+    expect(parsed.success && parsed.data).toMatchObject({
       totalCents: 19990,
       discountCodes: ["ANA10"],
       utmSource: "conty",
@@ -23,7 +27,7 @@ describe("payload de pedido", () => {
 
   it("recusa total_price numérico (evita float)", () => {
     const parsed = parseOrderPayload({ id: 1, total_price: 199.9, currency: "BRL", financial_status: "paid", created_at: "2026-01-01T00:00:00Z" });
-    expect(parsed.ok).toBe(false);
+    expect(parsed.success).toBe(false);
   });
 
   it("landing_site ausente ou sem UTM vira nulo", () => {
@@ -44,7 +48,7 @@ describe("payload de estorno", () => {
         { amount: "99.00", kind: "refund", status: "failure", currency: "BRL" },
       ],
     });
-    expect(parsed.ok && parsed.value).toMatchObject({ amountCents: 3550, currency: "BRL" });
+    expect(parsed.success && parsed.data).toMatchObject({ amountCents: 3550, currency: "BRL" });
   });
 
   it("transação com falha em outra moeda não derruba o estorno válido", () => {
@@ -57,7 +61,7 @@ describe("payload de estorno", () => {
         { amount: "30.00", kind: "refund", status: "success", currency: "BRL" },
       ],
     });
-    expect(parsed.ok && parsed.value).toMatchObject({ amountCents: 3000, currency: "BRL" });
+    expect(parsed.success && parsed.data).toMatchObject({ amountCents: 3000, currency: "BRL" });
   });
 });
 
@@ -67,12 +71,23 @@ describe("ids", () => {
   it("123 e \"0123\" viram o mesmo id canônico", () => {
     const a = parseOrderPayload({ ...base, id: 123 });
     const b = parseOrderPayload({ ...base, id: "0123" });
-    expect(a.ok && a.value.orderId).toBe("123");
-    expect(b.ok && b.value.orderId).toBe("123");
+    expect(a.success && a.data.orderId).toBe("123");
+    expect(b.success && b.data.orderId).toBe("123");
   });
 
   it("recusa id zero ou negativo", () => {
-    for (const id of [0, "0", "000", -5, "-5"]) expect(parseOrderPayload({ ...base, id }).ok).toBe(false);
+    for (const id of [0, "0", "000", -5, "-5"]) expect(parseOrderPayload({ ...base, id }).success).toBe(false);
+  });
+});
+
+describe("mensagens de erro", () => {
+  it("vêm em português, com caminho de cada campo", () => {
+    const parsed = parseRefundPayload({ id: 1, order_id: 2, created_at: "2026-01-02", transactions: [{ amount: 5, kind: "refund", status: "success" }] });
+    expect(parsed.success).toBe(false);
+    if (parsed.success) return;
+    expect(parsed.error.issues.map((i) => [i.path.join("."), i.message])).toEqual([
+      ["created_at", "created_at precisa ser data ISO 8601 com fuso, ex.: 2026-03-01T09:00:00-03:00"],
+    ]);
   });
 });
 

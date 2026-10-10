@@ -53,18 +53,22 @@ const early = one(`
   SELECT COUNT(*) AS n FROM refunds r JOIN orders o ON o.order_id = r.order_id WHERE r.received_at < o.received_at`);
 const deliveries = one("SELECT COUNT(*) AS n FROM webhook_deliveries");
 const duplicates = one("SELECT COUNT(*) AS n FROM webhook_deliveries WHERE outcome = 'duplicado'");
+const divergent = one("SELECT COUNT(*) AS n FROM webhook_deliveries WHERE outcome = 'duplicado_divergente'");
+const rejected = one("SELECT COUNT(*) AS n FROM webhook_deliveries WHERE outcome LIKE 'recusado:%'");
 
 console.log(`pedidos gravados: ${orderCount} (esperado ${orders.length})`);
 console.log(`estornos gravados: ${refundCount} (esperado ${refunds.length}), pendentes no fim: ${pending}`);
 console.log(`estornos que chegaram antes do pedido: ${early}`);
 console.log(`estornos limitados ou rejeitados por passar do total: ${capped}`);
 console.log(`pedidos com estorno acima do total: ${overRefunded}`);
-console.log(`entregas recebidas: ${deliveries}, das quais duplicadas: ${duplicates}`);
+console.log(`entregas registradas: ${deliveries}, duplicadas: ${duplicates}, divergentes: ${divergent}, recusadas por payload inválido: ${rejected}`);
 
 if (orderCount !== orders.length) failures.push("quantidade de pedidos diverge");
 if (refundCount !== refunds.length) failures.push("quantidade de estornos diverge");
 if (pending !== 0) failures.push("sobrou estorno pendente com pedido já recebido");
 if (overRefunded !== 0) failures.push("há pedido com estornos acima do total");
+if (divergent !== 0) failures.push("a massa não tem divergência, mas houve duplicado_divergente");
+if (rejected === 0) failures.push("a carga não exercitou payload inválido assinado");
 if (early === 0) failures.push("a carga não exercitou estorno antes do pedido");
 
 if (failures.length > 0) {

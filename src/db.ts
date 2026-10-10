@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
   outcome      TEXT NOT NULL,
   received_at  TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS deliveries_by_resource ON webhook_deliveries(topic, resource_id);
 
 -- Histórico não se apaga e não se reescreve. Estas travas valem mesmo que
 -- algum código futuro tente.

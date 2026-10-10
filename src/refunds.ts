@@ -31,6 +31,9 @@ export function decideRefund(input: RefundDecisionInput): RefundDecision {
       reason: `moeda do estorno (${input.refundCurrency}) diferente da moeda do pedido (${input.orderCurrency})`,
     };
   }
+  if (input.requestedCents === 0) {
+    return { status: "rejeitado", appliedCents: 0, reason: "estorno sem valor: nenhuma transação de refund com sucesso" };
+  }
   const remaining = Math.max(0, input.orderTotalCents - input.alreadyAppliedCents);
   if (input.requestedCents <= remaining) {
     return { status: "aplicado", appliedCents: input.requestedCents, reason: null };

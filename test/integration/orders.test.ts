@@ -46,7 +46,8 @@ describe("webhook de pedido", () => {
   it("repetição com conteúdo diferente não sobrescreve: vale a primeira versão", async () => {
     const ctx = await setupWithCreators();
     await ctx.sendOrder(order());
-    await ctx.sendOrder(order({ total_price: "999.00", discount_codes: [{ code: "BRUNO15" }] }));
+    const again = await ctx.sendOrder(order({ total_price: "999.00", discount_codes: [{ code: "BRUNO15" }] }));
+    expect(((await again.json()) as any).result).toBe("duplicado_divergente");
     const view = await ctx.getJson("/orders/1001");
     expect(view.body).toMatchObject({ totalCents: 10000, attribution: { creatorId: "ana" } });
   });
@@ -102,7 +103,11 @@ describe("webhook de pedido", () => {
     const res = await ctx.sendOrder(order({ total_price: "10.005" }), { webhookId: "w-ruim" });
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({
-      error: { code: "VALIDATION_ERROR", message: 'total_price precisa ser string decimal, ex.: "199.90"' },
+      error: {
+        code: "VALIDATION_ERROR",
+        message: 'total_price precisa ser string decimal, ex.: "199.90"',
+        details: [{ path: "total_price", message: 'total_price precisa ser string decimal, ex.: "199.90"' }],
+      },
     });
     const log = ctx.db.prepare("SELECT webhook_id, resource_id, outcome FROM webhook_deliveries").all();
     expect(log).toEqual([

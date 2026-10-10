@@ -31,7 +31,11 @@ Sem `WEBHOOK_SECRET`, o servidor usa um segredo de desenvolvimento e avisa no lo
 | POST | `/creators` | cadastra criador com `utmCampaign` e `coupons` |
 | GET | `/creators/:id` | criador cadastrado |
 
-Erros saem como `{ "error": { "code": "...", "message": "..." } }`: 400 para payload inválido, 401 para assinatura inválida, 404 e 409 (cupom ou UTM que já pertence a outro criador).
+Erros saem como `{ "error": { "code": "...", "message": "..." } }`: 400 para payload inválido, 401 para assinatura inválida, 404, 409 (cupom ou UTM que já pertence a outro criador), 413 para corpo acima de 1 MB e 500 genérico, sem stack trace, para erro inesperado. Erro de validação traz também `details`, com `path` e `message` de cada campo recusado.
+
+### Validação e limites
+
+Toda entrada (corpo, headers e params de rota) passa por um schema zod em `src/schemas.ts`, com mensagens em português. Nos webhooks, confiro o HMAC sobre o corpo cru primeiro e só depois faço `JSON.parse` e `safeParse`. Recuso com 400: JSON malformado ou que não é objeto, campo ausente ou com tipo errado, texto vazio, valor que não é string decimal, id que não é inteiro positivo, data sem fuso ou que não existe no calendário, `financial_status` desconhecido, estorno sem transações, e listas ou textos acima do limite (50 cupons, 50 transações, 100 caracteres por cupom, 2048 no `landing_site`). `POST /creators` exige `Content-Type: application/json`. Os webhooks leem o corpo cru com qualquer Content-Type, porque a assinatura é sobre ele. Campos desconhecidos são ignorados. Rota ou método inexistente devolve 404 JSON.
 
 Nos webhooks, 400 e 401 são recusa: a Shopify trata resposta fora de 2xx como falha e reenvia. A entrega recusada por payload inválido fica em `webhook_deliveries` com `outcome` igual a `recusado: <motivo>`, para dar para investigar depois.
 
@@ -44,7 +48,7 @@ Quatro tabelas em `src/db.ts`, onde fica todo o SQL:
 - `refunds`: um registro por `refund_id` (chave primária), com o valor pedido e o valor aplicado.
 - `webhook_deliveries`: log de cada entrega recebida, inclusive as repetidas.
 
-Dinheiro é sempre inteiro em centavos. O `total_price` chega como string (`"199.90"`) e vira centavos por parsing da string (`src/money.ts`), sem passar por float. Zeros depois da segunda casa são aceitos (`"1.230"` vira 123 centavos). Número em vez de string, ou um dígito diferente de zero depois da segunda casa (`"10.005"`), é recusado com 400.
+Dinheiro é sempre inteiro em centavos. O `total_price` chega como string (`"199.90"`) e vira centavos por parsing da string (`src/money.ts`), sem passar por float. Aceito até 10 dígitos na parte inteira, para que mesmo a soma de 50 transações caiba num inteiro seguro. Zeros depois da segunda casa são aceitos (`"1.230"` vira 123 centavos). Número em vez de string, ou um dígito diferente de zero depois da segunda casa (`"10.005"`), é recusado com 400.
 
 Ids de pedido e de estorno são normalizados (`123` e `"0123"` são o mesmo pedido). Id zero ou negativo é recusado.
 
@@ -79,7 +83,7 @@ Testes: `test/unit/attribution.test.ts` e, pela API, `test/integration/orders.te
 
 ### Estorno
 
-A função `decideRefund`, em `src/refunds.ts`, recebe o total do pedido, o que já foi aplicado, o valor pedido e as moedas. Devolve `aplicado`, `limitado` ou `rejeitado`, com o valor aplicado e o motivo. A soma aplicada nunca passa do total, e o excedente fica registrado no próprio estorno (`requestedCents` maior que `appliedCents`, com `reason`). O valor de um estorno é a soma das transações `kind: "refund"` com `status: "success"`. As outras transações são ignoradas antes de qualquer checagem, então uma falha em outra moeda não derruba o estorno.
+A função `decideRefund`, em `src/refunds.ts`, recebe o total do pedido, o que já foi aplicado, o valor pedido e as moedas. Devolve `aplicado`, `limitado` ou `rejeitado`, com o valor aplicado e o motivo. A soma aplicada nunca passa do total, e o excedente fica registrado no próprio estorno (`requestedCents` maior que `appliedCents`, com `reason`). O valor de um estorno é a soma das transações `kind: "refund"` com `status: "success"`. As outras transações são ignoradas antes de qualquer checagem, então uma falha em outra moeda não derruba o estorno. Estorno sem transações é recusado com 400. Estorno cujas transações falharam todas (valor zero) é gravado como `rejeitado`, com motivo.
 
 ### Estorno antes do pedido
 
@@ -164,7 +168,7 @@ HTTP 401
 
 ## Idempotência e concorrência
 
-- Pedido: `INSERT ... ON CONFLICT (order_id) DO NOTHING`. Se não inseriu, é repetição: responde 200 e não faz mais nada. A chave é o `order_id`, não o `X-Shopify-Webhook-Id`, porque o mesmo pedido pode chegar por entregas diferentes. A primeira versão vale. Uma repetição com outro total não sobrescreve (há teste).
+- Pedido: `INSERT ... ON CONFLICT (order_id) DO NOTHING`. Se não inseriu, é repetição: responde 200 e não faz mais nada. A chave é o `order_id`, não o `X-Shopify-Webhook-Id`, porque o mesmo pedido pode chegar por entregas diferentes. A primeira versão vale. Uma repetição com outro conteúdo (total ou moeda do pedido; valor, moeda ou pedido do estorno) não sobrescreve nada, mas a entrega fica marcada como `duplicado_divergente` no log e na resposta (há teste).
 - Estorno: o mesmo esquema com `refund_id`. Repetido antes ou depois do pedido, conta uma vez.
 - Cada webhook roda numa transação `BEGIN IMMEDIATE` (`store.transaction` em `src/db.ts`), que lê o já aplicado, decide e grava sem ninguém escrever no meio.
 - Testes com `Promise.all`: dez entregas iguais e simultâneas do mesmo pedido gravam um só; oito estornos de R$ 20 num pedido de R$ 100, cada um enviado três vezes ao mesmo tempo, terminam com R$ 100 aplicados; pedido e estornos misturados e repetidos chegam ao mesmo estado final.
@@ -177,15 +181,18 @@ Com várias instâncias, eu trocaria o sqlite por Postgres e manteria a mesma id
 
 ## Teste de carga
 
-`npm run load` sobe a API na porta 3103 com banco temporário e roda `load/webhooks.js` no k6 (`grafana/k6:0.54.0`). A massa (`load/dataset.js`) tem 5 criadores, 600 pedidos em cinco formatos (só cupom, só UTM, cupom contra UTM, cupom desconhecido com UTM, sem nada) e 750 estornos (parciais, somando 90% e somando 130% do total). Cada evento é entregue 4 vezes em ordem embaralhada, e cada entrega sai em par simultâneo, então são 8 cópias de cada evento. No fim, `scripts/verify-load.ts` compara o resumo por criador com o esperado da massa e confere no banco que nenhum pedido tem estorno acima do total e que não sobrou estorno pendente. Se algo quebrar, sai com código 1.
+`npm run load` sobe a API na porta 3103 com banco temporário e roda `load/webhooks.js` no k6 (`grafana/k6:0.54.0`). A massa (`load/dataset.js`) tem 5 criadores, 600 pedidos em cinco formatos (só cupom, só UTM, cupom contra UTM, cupom desconhecido com UTM, sem nada) e 750 estornos (parciais, somando 90% e somando 130% do total). Cada evento é entregue 4 vezes em ordem embaralhada, e cada entrega sai em par simultâneo, então são 8 cópias de cada evento. Uma em cada dez iterações manda um payload inválido (JSON quebrado, tipos errados, data sem fuso, estorno vazio, lixo aleatório), muitas vezes com id de pedido real. Metade vai assinada e precisa voltar 400; a outra metade vai com assinatura errada e precisa voltar 401. O check exige 4xx e nunca 5xx, e esses 4xx não contam como falha em `http_req_failed`. No fim, `scripts/verify-load.ts` compara o resumo por criador com o esperado da massa e confere no banco que nenhum pedido tem estorno acima do total, que não sobrou estorno pendente e que nenhum payload inválido mudou o estado. Se algo quebrar, sai com código 1.
 
 Resultado de uma execução local (macOS, k6 em Docker):
 
 ```
-✓ checks.........................: 100.00% 10800 out of 10800
-✓ http_req_duration..............: avg=51.16ms min=1.36ms med=42.14ms max=1.31s p(90)=86.23ms p(95)=104.44ms
-✓ http_req_failed................: 0.00%   0 out of 10805
-  http_reqs......................: 10805   1767.608338/s
+✓ inválido volta 4xx
+✓ inválido nunca 5xx
+✓ status 200 ou 201
+✓ checks.........................: 100.00% 12000 out of 12000
+✓ http_req_duration..............: avg=32.43ms min=700.46µs med=23.26ms max=883.22ms p(90)=56.7ms p(95)=76.29ms
+✓ http_req_failed................: 0.00%   0 out of 11405
+  http_reqs......................: 11405   2586.736143/s
 
 ok   criador-0: esperado {"orders":96,"grossCents":2396576,"refundedCents":1318654,"netCents":1077922} obtido {...igual}
 ...
@@ -195,13 +202,13 @@ estornos gravados: 750 (esperado 750), pendentes no fim: 0
 estornos que chegaram antes do pedido: 375
 estornos limitados ou rejeitados por passar do total: 150
 pedidos com estorno acima do total: 0
-entregas recebidas: 10800, das quais duplicadas: 9450
+entregas registradas: 11100, duplicadas: 9450, divergentes: 0, recusadas por payload inválido: 300
 VERIFICAÇÃO OK: invariantes mantidas
 ```
 
-Thresholds: p95 abaixo de 500 ms, falhas abaixo de 1%, checks acima de 99,9%.
+Thresholds: p95 abaixo de 500 ms, falhas abaixo de 1%, checks acima de 99,9%. A latência muda bastante de uma execução para outra na mesma máquina: nas últimas rodadas, o p95 ficou entre 60 ms e 117 ms.
 
-A ordem de envio é fixa, mas 50 VUs disputam as iterações ao mesmo tempo, então a ordem de chegada muda a cada execução. Por isso a contagem de estornos que chegaram antes do pedido varia um pouco entre execuções (já vi 374 e 375). Os totais por criador e as invariantes não variam.
+A ordem de envio é fixa, mas 50 VUs disputam as iterações ao mesmo tempo, então a ordem de chegada muda a cada execução. Por isso a contagem de estornos que chegaram antes do pedido varia um pouco entre execuções (já vi 374, 375 e 381). Os totais por criador e as invariantes não variam.
 
 Para o k6 importar a massa compartilhada, monto a pasta `load/` no container (`-v load:/load`) em vez de passar o script pelo stdin.
 
