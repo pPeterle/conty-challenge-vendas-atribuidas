@@ -56,6 +56,23 @@ describe("webhook de estorno", () => {
     expect(body.order.refunds[0]).toMatchObject({ status: "aplicado", appliedCents: 2500, resolvedAt: "2026-03-01T12:01:00.000Z" });
   });
 
+  it("GET /orders/:id/refunds lista os pendentes mesmo sem o pedido existir", async () => {
+    const ctx = await setupWithCreators();
+    await ctx.sendRefund(refund(2, "10.00", { created_at: "2026-03-06T10:00:00Z" }));
+    await ctx.sendRefund(refund(1, "20.00", { created_at: "2026-03-05T10:00:00Z" }));
+    const before = await ctx.getJson("/orders/1001/refunds");
+    expect(before.status).toBe(200);
+    expect(before.body).toMatchObject({ orderId: "1001", orderReceived: false, pendingCount: 2 });
+    expect(before.body.refunds.map((r: any) => [r.refundId, r.status])).toEqual([["1", "pendente"], ["2", "pendente"]]);
+    expect((await ctx.getJson("/orders/1001")).status).toBe(404);
+
+    await ctx.sendOrder(order());
+    const after = await ctx.getJson("/orders/1001/refunds");
+    expect(after.body).toMatchObject({ orderReceived: true, pendingCount: 0 });
+    expect(after.body.refunds.map((r: any) => r.status)).toEqual(["aplicado", "aplicado"]);
+    expect((await ctx.getJson("/orders/9999/refunds")).body).toEqual({ orderId: "9999", orderReceived: false, pendingCount: 0, refunds: [] });
+  });
+
   it("estorno repetido antes do pedido também conta uma vez só", async () => {
     const ctx = await setupWithCreators();
     await ctx.sendRefund(refund(1, "25.00"));

@@ -190,6 +190,17 @@ export function getOrderView(store: Store, orderId: string) {
   };
 }
 
+/** Estornos de um order_id, inclusive pendentes de um pedido que ainda não chegou. */
+export function listOrderRefunds(store: Store, orderId: string) {
+  const refunds = store.refundsOf(orderId).sort(byShopInstant);
+  return {
+    orderId,
+    orderReceived: store.getOrder(orderId) !== null,
+    pendingCount: refunds.filter((r) => r.status === "pendente").length,
+    refunds: refunds.map(refundView),
+  };
+}
+
 export function getRefundView(store: Store, refundId: string) {
   const refund = store.getRefund(refundId);
   if (!refund) throw notFound(`estorno ${refundId} não encontrado`);

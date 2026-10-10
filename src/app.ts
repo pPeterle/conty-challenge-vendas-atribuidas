@@ -13,6 +13,7 @@ import {
   getSummary,
   ingestOrder,
   ingestRefund,
+  listOrderRefunds,
   logIgnoredOrder,
   logRejectedDelivery,
   registerCreator,
@@ -128,6 +129,9 @@ export function createApp({ db, clock, webhookSecret }: AppDeps) {
   });
 
   app.get("/orders/:id", validate("param", orderParamSchema), (c) => c.json(getOrderView(store, c.req.valid("param").id)));
+  app.get("/orders/:id/refunds", validate("param", orderParamSchema), (c) =>
+    c.json(listOrderRefunds(store, c.req.valid("param").id)),
+  );
   app.get("/refunds/:id", validate("param", refundParamSchema), (c) => c.json(getRefundView(store, c.req.valid("param").id)));
   app.get("/creators/summary", (c) => c.json(getSummary(store)));
   app.get("/creators/:id", validate("param", creatorParamSchema), (c) => {
