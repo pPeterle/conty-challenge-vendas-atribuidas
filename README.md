@@ -1,23 +1,39 @@
 # Vendas atribuídas ao criador
 
-Serviço que recebe webhooks de pedido e de estorno no formato essencial da Shopify, atribui cada venda a no máximo um criador (por cupom ou UTM) e reverte essa atribuição quando chega estorno, sem apagar nada do histórico.
+Serviço que recebe webhooks de pedido e de estorno no formato essencial da Shopify, atribui cada venda a no máximo um criador (por cupom ou UTM) e reverte essa atribuição quando chega estorno, sem apagar o histórico. Não conecta numa loja de verdade: os webhooks são simulados com o mesmo formato, os mesmos headers e a mesma assinatura HMAC.
 
-Não conecta numa loja de verdade. Os webhooks são simulados com o mesmo formato, os mesmos headers (`X-Shopify-Webhook-Id`, `X-Shopify-Hmac-Sha256`) e a mesma assinatura HMAC.
+## Resumo
+
+- Desempate: o cupom vence a UTM, porque o comprador digita o cupom no checkout, perto da compra, enquanto a UTM vem do link de entrada, que pode ser de outra visita ou repassado. Cupom que não é de criador cai para a UTM. Sem nenhum dos dois, a venda fica sem criador. O motivo e os criadores que perderam o desempate (`discardedCreatorIds`) ficam gravados no pedido.
+- Idempotência: um pedido por `order_id` e um estorno por `refund_id`, com UNIQUE no banco. Webhook repetido, inclusive simultâneo ou depois de reiniciar o processo, responde 200 e não muda nada.
+- Teto de estornos: a soma aplicada nunca passa do total do pedido. O excedente fica registrado no estorno como `limitado` ou `rejeitado`, com motivo. Nada é apagado, e triggers no sqlite seguram isso mesmo fora da API.
+- Estorno antes do pedido: fica `pendente` e é aplicado na mesma transação em que o pedido chega, em ordem cronológica.
+
+### Por onde começar a leitura
+
+| Arquivo | O que tem |
+| --- | --- |
+| `src/attribution.ts` | a regra de atribuição e o desempate, função pura |
+| `src/refunds.ts` | quanto de um estorno é aplicado, função pura |
+| `src/sales.ts` | ingestão de pedido e estorno, cada uma numa transação |
+| `src/schemas.ts` | validação de toda entrada com zod |
+| `src/db.ts` | schema, triggers e todo o SQL |
+| `test/integration/refunds.test.ts` | estorno parcial, repetido, antes do pedido, concorrente |
 
 ## Como rodar
 
-Precisa de Node 22 ou mais novo. Para a carga, também de Docker.
+Precisa de Node 22.13 ou mais novo (por causa do `node:sqlite`). Para a carga, também de Docker.
 
 ```bash
 npm install
 npm run seed        # cadastra os criadores de exemplo "ana" e "bruno" em data/vendas.sqlite
 npm run dev         # sobe em http://127.0.0.1:3000 (PORT, DB_PATH e WEBHOOK_SECRET por variável de ambiente)
-npm test            # unitários + integração (sqlite em memória, relógio fixo)
+npm test            # unitários + integração (sqlite em memória e em arquivo, relógio fixo)
 npm run typecheck
 npm run load        # k6 via Docker na porta 3103 + verificação das invariantes
 ```
 
-Sem `WEBHOOK_SECRET`, o servidor usa um segredo de desenvolvimento e avisa no log.
+Sem `WEBHOOK_SECRET`, o servidor usa um segredo de desenvolvimento e avisa no log. A CI roda testes e typecheck em Node 22.13 e 24.
 
 ## Endpoints
 
@@ -26,204 +42,54 @@ Sem `WEBHOOK_SECRET`, o servidor usa um segredo de desenvolvimento e avisa no lo
 | POST | `/webhooks/shopify/orders` | webhook `orders/paid` |
 | POST | `/webhooks/shopify/refunds` | webhook `refunds/create` |
 | GET | `/orders/:id` | pedido com atribuição, estornos, líquido e log de entregas |
-| GET | `/refunds/:id` | estorno (inclusive pendente) e suas entregas |
+| GET | `/orders/:id/refunds` | estornos de um `order_id`, inclusive pendentes de pedido que ainda não chegou |
+| GET | `/refunds/:id` | um estorno e suas entregas |
 | GET | `/creators/summary` | bruto, estornado e líquido por criador e moeda, mais as vendas sem criador |
 | POST | `/creators` | cadastra criador com `utmCampaign` e `coupons` |
 | GET | `/creators/:id` | criador cadastrado |
 
-Erros saem como `{ "error": { "code": "...", "message": "..." } }`: 400 para payload inválido, 401 para assinatura inválida, 404, 409 (cupom ou UTM que já pertence a outro criador), 413 para corpo acima de 1 MB e 500 genérico, sem stack trace, para erro inesperado. Erro de validação traz também `details`, com `path` e `message` de cada campo recusado.
+Erros saem como `{ "error": { "code", "message", "details"? } }`. Os status são 400 (validação, com `path` e `message` de cada campo em `details`), 401 (assinatura), 404, 409 (cupom ou UTM de outro criador), 413 (corpo acima de 1 MB) e 500 genérico, sem stack trace. Nos webhooks, 400 e 401 são recusa: a Shopify trata resposta fora de 2xx como falha e reenvia. A entrega recusada por payload inválido fica em `webhook_deliveries` como `recusado: <motivo>`.
 
-### Validação e limites
+Exemplos reais de request e response estão em [docs/exemplos.md](docs/exemplos.md).
 
-Toda entrada (corpo, headers e params de rota) passa por um schema zod em `src/schemas.ts`, com mensagens em português. Nos webhooks, confiro o HMAC sobre o corpo cru primeiro e só depois faço `JSON.parse` e `safeParse`. Recuso com 400: JSON malformado ou que não é objeto, campo ausente ou com tipo errado, texto vazio, valor que não é string decimal, id que não é inteiro positivo, data sem fuso ou que não existe no calendário, `financial_status` desconhecido, estorno sem transações, e listas ou textos acima do limite (50 cupons, 50 transações, 100 caracteres por cupom, 2048 no `landing_site`). `POST /creators` exige `Content-Type: application/json`. Os webhooks leem o corpo cru com qualquer Content-Type, porque a assinatura é sobre ele. Campos desconhecidos são ignorados. Rota ou método inexistente devolve 404 JSON.
+## Regras e decisões
 
-Nos webhooks, 400 e 401 são recusa: a Shopify trata resposta fora de 2xx como falha e reenvia. A entrega recusada por payload inválido fica em `webhook_deliveries` com `outcome` igual a `recusado: <motivo>`, para dar para investigar depois.
+**Atribuição** (`src/attribution.ts`). Ordem: cupom de criador; se houver cupons de criadores diferentes, vence o primeiro na ordem enviada. Depois vem a UTM de criador, que exige `utm_source=conty` e `utm_campaign` igual ao código do criador (lida do `landing_site`). Exijo `utm_source=conty` para que uma campanha da própria marca com nome igual ao código de um criador não seja atribuída a ele. A atribuição é gravada na chegada e não muda depois. Com os estornos, o status passa de `ativa` a `parcialmente_revertida` ou `revertida`.
 
-## Modelo de dados
+**Estorno** (`src/refunds.ts`). Valor do estorno é a soma das transações `kind: "refund"` com `status: "success"`. As outras são ignoradas antes de checar valor e moeda. Estorno sem transações dá 400. Estorno de valor zero, em outra moeda ou em pedido já zerado vira `rejeitado`; o que passa do restante vira `limitado`. Repetição com outro conteúdo não muda nada e fica marcada como `duplicado_divergente`.
 
-Quatro tabelas em `src/db.ts`, onde fica todo o SQL:
+**Dinheiro.** Sempre centavos inteiros, convertidos direto da string (`"199.90"`), sem float. Recuso valor numérico (`199.9`) porque o `JSON.parse` lê número como float, e um valor como `0.29` não tem representação exata em float. A Shopify manda string, então número indica erro de quem enviou. Zeros depois da segunda casa são aceitos (`"1.230"`); outro dígito ali (`"10.005"`) é recusado. Pedido de `"0.00"` (brinde com cupom de 100%, por exemplo) é aceito e atribuído; estorno nele é `rejeitado` com motivo, porque não há o que devolver.
 
-- `creators` e `creator_coupons`: quem é dono de qual cupom e de qual `utm_campaign`. Os dois são únicos, então um cupom nunca pertence a dois criadores.
-- `orders`: um registro por `order_id` (chave primária). A atribuição é gravada na chegada, com método, motivo e detalhe, e não muda mais.
-- `refunds`: um registro por `refund_id` (chave primária), com o valor pedido e o valor aplicado.
-- `webhook_deliveries`: log de cada entrega recebida, inclusive as repetidas.
+**Pedido não pago.** `financial_status` fora de `paid`, `partially_refunded` e `refunded` responde 200 com `"result": "ignorado"` e não grava venda. O pedido entra quando chegar como pago.
 
-Dinheiro é sempre inteiro em centavos. O `total_price` chega como string (`"199.90"`) e vira centavos por parsing da string (`src/money.ts`), sem passar por float. Aceito até 10 dígitos na parte inteira, para que mesmo a soma de 50 transações caiba num inteiro seguro. Zeros depois da segunda casa são aceitos (`"1.230"` vira 123 centavos). Número em vez de string, ou um dígito diferente de zero depois da segunda casa (`"10.005"`), é recusado com 400.
-
-Ids de pedido e de estorno são normalizados (`123` e `"0123"` são o mesmo pedido). Id zero ou negativo é recusado.
-
-Estados de um estorno:
-
-```mermaid
-stateDiagram-v2
-  [*] --> pendente: chega antes do pedido
-  [*] --> aplicado: cabe no que resta
-  [*] --> limitado: passa do que resta (aplica só o resto)
-  [*] --> rejeitado: pedido já zerado ou moeda diferente
-  pendente --> aplicado: pedido chega
-  pendente --> limitado: pedido chega
-  pendente --> rejeitado: pedido chega
-```
-
-Saindo de `pendente`, o estorno não muda mais. A atribuição do pedido aparece como `ativa`, `parcialmente_revertida` ou `revertida`. Esse status é calculado do líquido, nada é sobrescrito.
-
-## Regras e onde vivem
-
-### Atribuição
-
-A função `attribute`, em `src/attribution.ts`, é o único lugar que decide. A ordem é:
-
-1. Cupom de criador. Se houver cupons de criadores diferentes, vence o primeiro na ordem em que a loja enviou (motivo `cupons_de_criadores_diferentes`).
-2. UTM de criador: `utm_source=conty` e `utm_campaign` igual ao código UTM do criador. As UTMs são lidas do `landing_site`.
-3. Nenhum dos dois: a venda é gravada sem criador (motivo `sem_criador`, com o que foi visto no detalhe).
-
-Quando cupom e UTM apontam para criadores diferentes, o cupom vence (motivo `cupom_vence_utm`). Escolhi assim porque o comprador digita o cupom no checkout, perto da compra. A UTM vem do link de entrada, que pode ser de outra visita ou ter sido repassado. Cupom que não pertence a nenhum criador (ex.: `FRETEGRATIS`) é ignorado e a regra segue para a UTM. Exijo `utm_source=conty` para que uma campanha da própria marca cujo nome coincida com o código de um criador não seja atribuída a ele.
-
-Testes: `test/unit/attribution.test.ts` e, pela API, `test/integration/orders.test.ts` ("desempate: cupom e UTM de criadores diferentes...", "cupom desconhecido cai para a UTM", "sem cupom nem UTM...").
-
-### Estorno
-
-A função `decideRefund`, em `src/refunds.ts`, recebe o total do pedido, o que já foi aplicado, o valor pedido e as moedas. Devolve `aplicado`, `limitado` ou `rejeitado`, com o valor aplicado e o motivo. A soma aplicada nunca passa do total, e o excedente fica registrado no próprio estorno (`requestedCents` maior que `appliedCents`, com `reason`). O valor de um estorno é a soma das transações `kind: "refund"` com `status: "success"`. As outras transações são ignoradas antes de qualquer checagem, então uma falha em outra moeda não derruba o estorno. Estorno sem transações é recusado com 400. Estorno cujas transações falharam todas (valor zero) é gravado como `rejeitado`, com motivo.
-
-### Estorno antes do pedido
-
-Em `src/sales.ts`, o estorno sem pedido é gravado como `pendente`. Quando o pedido chega, os pendentes daquele pedido são aplicados na mesma transação que insere o pedido, em ordem cronológica de `created_at` (comparo o instante, então `10:00-03:00` vem depois de `12:00Z`). Não existe janela em que o pedido está gravado e o estorno ainda não.
-
-### Pedido não pago
-
-Pedido com `financial_status` fora de `paid`, `partially_refunded` e `refunded` responde 200 com `"result": "ignorado"` e não grava venda (só o log da entrega). Respondo 200 para a loja não reenviar. O pedido entra quando chegar como pago.
-
-### Histórico
-
-Triggers no sqlite impedem apagar pedido ou estorno, alterar pedido, mexer num estorno já resolvido e passar do total do pedido. A regra mora no código, e os triggers seguram o caso de alguém ir direto no banco (há teste para isso).
-
-## Exemplos reais
-
-Saídas copiadas de uma execução local, com `npm run seed` e o servidor em `PORT=3103 WEBHOOK_SECRET=segredo-local`. Para assinar como a Shopify:
-
-```bash
-SECRET=segredo-local
-URL=http://127.0.0.1:3103
-send() { # $1 caminho, $2 webhook id, $3 corpo
-  SIG=$(printf '%s' "$3" | openssl dgst -sha256 -hmac "$SECRET" -binary | base64)
-  curl -s -w '\nHTTP %{http_code}\n' -X POST "$URL$1" \
-    -H 'content-type: application/json' \
-    -H "x-shopify-webhook-id: $2" \
-    -H "x-shopify-hmac-sha256: $SIG" \
-    -d "$3"
-}
-```
-
-Estorno que chega antes do pedido fica pendente:
-
-```bash
-send /webhooks/shopify/refunds wh-r1 '{"id":7001,"order_id":5001,"created_at":"2026-03-05T10:00:00-03:00","transactions":[{"amount":"40.00","currency":"BRL","kind":"refund","status":"success"}]}'
-```
-
-```json
-{"result":"criado","refund":{"refundId":"7001","orderId":"5001","status":"pendente","requestedCents":4000,"appliedCents":null,"reason":null,"currency":"BRL","createdAt":"2026-03-05T10:00:00-03:00","receivedAt":"2026-10-10T03:25:15.965Z","resolvedAt":null,"deliveries":[{"webhookId":"wh-r1","outcome":"criado","receivedAt":"2026-10-10T03:25:15.965Z"}]}}
-HTTP 201
-```
-
-O pedido chega com cupom da Ana e UTM do Bruno. O cupom vence, e o estorno pendente é aplicado na mesma hora:
-
-```bash
-send /webhooks/shopify/orders wh-o1 '{"id":5001,"total_price":"199.90","currency":"BRL","financial_status":"paid","created_at":"2026-03-01T09:00:00-03:00","discount_codes":[{"code":"ANA10","amount":"19.99","type":"percentage"}],"landing_site":"/produtos/tenis?utm_source=conty&utm_campaign=bruno"}'
-```
-
-```json
-{"result":"criado","order":{"orderId":"5001","totalCents":19990,"refundedCents":4000,"netCents":15990,"currency":"BRL","financialStatus":"paid","createdAt":"2026-03-01T09:00:00-03:00","receivedAt":"2026-10-10T03:25:15.990Z","discountCodes":["ANA10"],"utm":{"source":"conty","medium":null,"campaign":"bruno"},"attribution":{"creatorId":"ana","method":"cupom","reason":"cupom_vence_utm","detail":"cupom ana10 venceu a UTM bruno (bruno)","status":"parcialmente_revertida"},"refunds":[{"refundId":"7001","orderId":"5001","status":"aplicado","requestedCents":4000,"appliedCents":4000,"reason":null,"currency":"BRL","createdAt":"2026-03-05T10:00:00-03:00","receivedAt":"2026-10-10T03:25:15.965Z","resolvedAt":"2026-10-10T03:25:15.990Z"}],"deliveries":[{"webhookId":"wh-o1","outcome":"criado","receivedAt":"2026-10-10T03:25:15.990Z"}]}}
-HTTP 201
-```
-
-O mesmo webhook de novo responde 200 com `"result":"duplicado"`, sem somar nada (os valores continuam `totalCents: 19990`, `refundedCents: 4000`). Só o log de entregas ganha uma linha `duplicado`.
-
-Um estorno de R$ 180,00 passa do que resta (R$ 159,90) e é limitado:
-
-```bash
-send /webhooks/shopify/refunds wh-r2 '{"id":7002,"order_id":5001,"created_at":"2026-03-08T10:00:00-03:00","transactions":[{"amount":"180.00","currency":"BRL","kind":"refund","status":"success"}]}'
-```
-
-```json
-{"result":"criado","refund":{"refundId":"7002","orderId":"5001","status":"limitado","requestedCents":18000,"appliedCents":15990,"reason":"pedido tinha 15990 centavos restantes; 2010 centavos pedidos a mais não foram aplicados","currency":"BRL","createdAt":"2026-03-08T10:00:00-03:00","receivedAt":"2026-10-10T03:25:16.030Z","resolvedAt":"2026-10-10T03:25:16.030Z","deliveries":[{"webhookId":"wh-r2","outcome":"criado","receivedAt":"2026-10-10T03:25:16.030Z"}]}}
-HTTP 201
-```
-
-Agora `GET /orders/5001` mostra `"netCents":0` e a atribuição `"status":"revertida"`, com os dois estornos listados. O resumo:
-
-```bash
-curl -s $URL/creators/summary
-```
-
-```json
-{"creators":[{"creatorId":"ana","creatorName":"Ana Souza","currency":"BRL","orders":1,"grossCents":19990,"refundedCents":19990,"netCents":0}],"unattributed":[]}
-```
-
-Assinatura errada:
-
-```json
-{"error":{"code":"INVALID_SIGNATURE","message":"assinatura X-Shopify-Hmac-Sha256 ausente ou inválida"}}
-HTTP 401
-```
+**Validação** (`src/schemas.ts`). Corpo, headers e params passam por zod. Nos webhooks, confiro o HMAC sobre o corpo cru e só depois faço `JSON.parse` e `safeParse`. Datas exigem fuso e precisam existir no calendário. Ids são inteiros positivos normalizados (`123` e `"0123"` são o mesmo pedido). Listas e textos têm limite (50 cupons, 50 transações, 100 caracteres por cupom). Campos desconhecidos são ignorados.
 
 ## Idempotência e concorrência
 
-- Pedido: `INSERT ... ON CONFLICT (order_id) DO NOTHING`. Se não inseriu, é repetição: responde 200 e não faz mais nada. A chave é o `order_id`, não o `X-Shopify-Webhook-Id`, porque o mesmo pedido pode chegar por entregas diferentes. A primeira versão vale. Uma repetição com outro conteúdo (total ou moeda do pedido; valor, moeda ou pedido do estorno) não sobrescreve nada, mas a entrega fica marcada como `duplicado_divergente` no log e na resposta (há teste).
-- Estorno: o mesmo esquema com `refund_id`. Repetido antes ou depois do pedido, conta uma vez.
-- Cada webhook roda numa transação `BEGIN IMMEDIATE` (`store.transaction` em `src/db.ts`), que lê o já aplicado, decide e grava sem ninguém escrever no meio.
-- Testes com `Promise.all`: dez entregas iguais e simultâneas do mesmo pedido gravam um só; oito estornos de R$ 20 num pedido de R$ 100, cada um enviado três vezes ao mesmo tempo, terminam com R$ 100 aplicados; pedido e estornos misturados e repetidos chegam ao mesmo estado final.
+Cada webhook roda numa transação `BEGIN IMMEDIATE` com `INSERT ... ON CONFLICT DO NOTHING`. A chave é o `order_id`/`refund_id`, não o `X-Shopify-Webhook-Id`, porque o mesmo pedido pode chegar por entregas diferentes. Os testes disparam entregas iguais e diferentes ao mesmo tempo com `Promise.all`, e um teste com arquivo em disco fecha e reabre o banco para mostrar que pendência e idempotência sobrevivem.
 
 ## Por que essa solução
 
-Um processo Node com sqlite serializa as escritas. Com uma instância só, a transação curta com restrição UNIQUE resolve duplicidade e corrida sem precisar de fila nem de lock. Não usei Redis porque a restrição do banco já garante que a mesma venda não entra duas vezes, e um lock externo seria mais uma peça para cair.
+Um processo Node com sqlite serializa as escritas. Com uma instância só, a transação curta com restrição UNIQUE resolve duplicidade e corrida sem fila nem lock. Não usei Redis porque a restrição do banco já garante que a mesma venda não entra duas vezes, e um lock externo seria mais uma peça para cair.
 
-Com várias instâncias, eu trocaria o sqlite por Postgres e manteria a mesma ideia: `order_id` e `refund_id` únicos, `INSERT ... ON CONFLICT DO NOTHING` e `SELECT ... FOR UPDATE` na linha do pedido ao aplicar estorno, para dois estornos simultâneos não lerem o mesmo "já aplicado". Lock distribuído só valeria se houvesse efeito colateral fora do banco, como pagar o criador na hora, e mesmo assim eu começaria por uma tabela de outbox.
+Com várias instâncias, eu trocaria o sqlite por Postgres e manteria a ideia: `order_id` e `refund_id` únicos, `INSERT ... ON CONFLICT DO NOTHING` e `SELECT ... FOR UPDATE` na linha do pedido ao aplicar estorno. Lock distribuído só valeria com efeito colateral fora do banco, como pagar o criador na hora, e mesmo assim eu começaria por uma tabela de outbox.
 
 ## Teste de carga
 
-`npm run load` sobe a API na porta 3103 com banco temporário e roda `load/webhooks.js` no k6 (`grafana/k6:0.54.0`). A massa (`load/dataset.js`) tem 5 criadores, 600 pedidos em cinco formatos (só cupom, só UTM, cupom contra UTM, cupom desconhecido com UTM, sem nada) e 750 estornos (parciais, somando 90% e somando 130% do total). Cada evento é entregue 4 vezes em ordem embaralhada, e cada entrega sai em par simultâneo, então são 8 cópias de cada evento. Uma em cada dez iterações manda um payload inválido (JSON quebrado, tipos errados, data sem fuso, estorno vazio, lixo aleatório), muitas vezes com id de pedido real. Metade vai assinada e precisa voltar 400; a outra metade vai com assinatura errada e precisa voltar 401. O check exige 4xx e nunca 5xx, e esses 4xx não contam como falha em `http_req_failed`. No fim, `scripts/verify-load.ts` compara o resumo por criador com o esperado da massa e confere no banco que nenhum pedido tem estorno acima do total, que não sobrou estorno pendente e que nenhum payload inválido mudou o estado. Se algo quebrar, sai com código 1.
-
-Resultado de uma execução local (macOS, k6 em Docker):
-
-```
-✓ inválido volta 4xx
-✓ inválido nunca 5xx
-✓ status 200 ou 201
-✓ checks.........................: 100.00% 12000 out of 12000
-✓ http_req_duration..............: avg=32.43ms min=700.46µs med=23.26ms max=883.22ms p(90)=56.7ms p(95)=76.29ms
-✓ http_req_failed................: 0.00%   0 out of 11405
-  http_reqs......................: 11405   2586.736143/s
-
-ok   criador-0: esperado {"orders":96,"grossCents":2396576,"refundedCents":1318654,"netCents":1077922} obtido {...igual}
-...
-ok   (sem criador): esperado {"orders":120,"grossCents":3115420,"refundedCents":1724990,"netCents":1390430} obtido {...igual}
-pedidos gravados: 600 (esperado 600)
-estornos gravados: 750 (esperado 750), pendentes no fim: 0
-estornos que chegaram antes do pedido: 375
-estornos limitados ou rejeitados por passar do total: 150
-pedidos com estorno acima do total: 0
-entregas registradas: 11100, duplicadas: 9450, divergentes: 0, recusadas por payload inválido: 300
-VERIFICAÇÃO OK: invariantes mantidas
-```
-
-Thresholds: p95 abaixo de 500 ms, falhas abaixo de 1%, checks acima de 99,9%. A latência muda bastante de uma execução para outra na mesma máquina: nas últimas rodadas, o p95 ficou entre 60 ms e 117 ms.
-
-A ordem de envio é fixa, mas 50 VUs disputam as iterações ao mesmo tempo, então a ordem de chegada muda a cada execução. Por isso a contagem de estornos que chegaram antes do pedido varia um pouco entre execuções (já vi 374, 375 e 381). Os totais por criador e as invariantes não variam.
-
-Para o k6 importar a massa compartilhada, monto a pasta `load/` no container (`-v load:/load`) em vez de passar o script pelo stdin.
+O k6 entrega 600 pedidos e 750 estornos, cada um 8 vezes, em ordem embaralhada e em pares simultâneos, com 10% de payloads inválidos no meio. No fim, um script confere o resumo por criador contra o esperado e confirma que nenhum pedido tem estorno acima do total. Na última execução: checks 100% (12000/12000), 0% de falhas, p95 de 43 ms e 3361 req/s, com as invariantes mantidas. O cenário completo e a saída estão em [docs/carga.md](docs/carga.md).
 
 ## O que ficou de fora
 
 - Atualizações de pedido (`orders/updated`, `orders/cancelled`). Cancelamento sem estorno não reverte a atribuição.
-- Moedas com casas decimais diferentes de duas. O parser assume duas casas.
+- Moedas com casas decimais diferentes de duas.
 - Valor de estorno por item (`refund_line_items`). Uso só as transações.
 - Autenticação no `POST /creators` e nas leituras.
-- Fila: o webhook é processado na própria requisição, numa transação curta no sqlite.
+- Fila: o webhook é processado na própria requisição, numa transação curta.
 
 ## O que eu faria diferente com mais tempo
 
 - Guardar o payload cru de cada entrega para reprocessar se a regra mudar.
-- Um endpoint para listar estornos pendentes antigos (pedido que nunca chegou), com alerta.
+- Listar estornos pendentes antigos de todos os pedidos (pedido que nunca chegou), com alerta.
 - Janela de validade da UTM, quando a loja mandar dados de sessão.
 - Paginação e filtro por período no resumo.
 
