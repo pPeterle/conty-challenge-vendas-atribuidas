@@ -61,6 +61,7 @@ const badOrders: Array<[string, Record<string, unknown>]> = [
   ["data inválida", { created_at: "ontem" }],
   ["data sem fuso", { created_at: "2026-03-01T09:00:00" }],
   ["data inexistente", { created_at: "2026-02-30T09:00:00Z" }],
+  ["cancelled_at sem fuso", { cancelled_at: "2026-03-07 10:00" }],
   ["discount_codes objeto", { discount_codes: { code: "ANA10" } }],
   ["cupom vazio", { discount_codes: [{ code: "  " }] }],
   ["cupom número", { discount_codes: [{ code: 10 }] }],

@@ -125,10 +125,12 @@ function calendarDateExists(value: string): boolean {
 }
 
 /** Data com fuso explícito: sem ele, o instante dependeria do fuso do servidor. */
-const timestamp = z
-  .string()
-  .datetime({ offset: true })
-  .refine(calendarDateExists, { message: "created_at tem uma data que não existe no calendário" });
+const timestampOf = (field: string) =>
+  z
+    .string()
+    .datetime({ offset: true })
+    .refine(calendarDateExists, { message: `${field} tem uma data que não existe no calendário` });
+const timestamp = timestampOf("created_at");
 
 // ---------------------------------------------------------------- webhooks
 
@@ -160,6 +162,7 @@ export const orderWebhookSchema = z
       .max(LIMITS.discountCodes)
       .nullish(),
     landing_site: z.string().max(LIMITS.landingSiteLength).nullish(),
+    cancelled_at: timestampOf("cancelled_at").nullish(),
   })
   .transform((o) => {
     const landingSite = o.landing_site ?? null;
@@ -169,6 +172,7 @@ export const orderWebhookSchema = z
       totalCents: o.total_price,
       currency: o.currency,
       financialStatus: o.financial_status,
+      cancelledAt: o.cancelled_at ?? null,
       createdAt: o.created_at,
       discountCodes: (o.discount_codes ?? []).map((d) => d.code),
       landingSite,

@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { zValidator } from "@hono/zod-validator";
-import { Hono, type MiddlewareHandler, type ValidationTargets } from "hono";
+import { Hono, type Context, type MiddlewareHandler, type ValidationTargets } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { HTTPException } from "hono/http-exception";
 import type { ZodSchema } from "zod";
@@ -8,6 +8,7 @@ import type { Clock } from "./clock.ts";
 import { createStore } from "./db.ts";
 import { AppError, notFound, validation } from "./errors.ts";
 import {
+  cancelOrder,
   getOrderView,
   getRefundView,
   getSummary,
@@ -111,9 +112,15 @@ export function createApp({ db, clock, webhookSecret }: AppDeps) {
     return c.json(creator, 201);
   });
 
-  app.post("/webhooks/shopify/orders", verifySignature, validate("header", webhookHeadersSchema), async (c) => {
-    const webhookId = c.req.valid("header")["x-shopify-webhook-id"];
+  // orders/paid e orders/cancelled chegam no mesmo formato; cancelled_at ou voided indica cancelamento.
+  const orderHandler = [verifySignature, validate("header", webhookHeadersSchema), async (c: Context) => {
+    const webhookId = c.req.header("x-shopify-webhook-id")!.trim();
     const order = await parseWebhook(await c.req.text(), orderWebhookSchema, "orders/paid", webhookId);
+    if (order.cancelledAt !== null || order.financialStatus === "voided") {
+      const result = cancelOrder(store, clock, order, webhookId);
+      const view = store.getOrder(order.orderId) ? getOrderView(store, order.orderId) : null;
+      return c.json({ result, orderId: order.orderId, order: view }, result === "duplicado" ? 200 : 201);
+    }
     if (!(COUNTED_FINANCIAL_STATUSES as readonly string[]).includes(order.financialStatus)) {
       // 200 para a loja não reenviar; o pedido entra quando vier o orders/paid.
       logIgnoredOrder(store, clock, order, webhookId);
@@ -121,7 +128,9 @@ export function createApp({ db, clock, webhookSecret }: AppDeps) {
     }
     const result = ingestOrder(store, clock, order, webhookId);
     return c.json({ result, order: getOrderView(store, order.orderId) }, result === "criado" ? 201 : 200);
-  });
+  }] as const;
+  app.post("/webhooks/shopify/orders", ...orderHandler);
+  app.post("/webhooks/shopify/orders/cancelled", ...orderHandler);
 
   app.post("/webhooks/shopify/refunds", verifySignature, validate("header", webhookHeadersSchema), async (c) => {
     const webhookId = c.req.valid("header")["x-shopify-webhook-id"];

@@ -56,11 +56,29 @@ export function decideRefund(input: RefundDecisionInput): RefundDecision {
   };
 }
 
-export type AttributionStatus = "ativa" | "parcialmente_revertida" | "revertida" | "sem_criador";
+/**
+ * Cancelamento (cancelled_at ou financial_status voided) reverte o saldo que
+ * ainda resta, num lançamento só. Se nada resta, fica registrado como rejeitado.
+ */
+export function decideCancellation(orderTotalCents: number, alreadyAppliedCents: number): RefundDecision {
+  const remaining = Math.max(0, orderTotalCents - alreadyAppliedCents);
+  if (remaining === 0) {
+    return { status: "rejeitado", appliedCents: 0, reason: "cancelamento: o pedido já estava zerado, nada a reverter" };
+  }
+  return { status: "aplicado", appliedCents: remaining, reason: "cancelamento do pedido: saldo restante revertido" };
+}
+
+export type AttributionStatus = "ativa" | "parcialmente_revertida" | "revertida" | "cancelada" | "sem_criador";
 
 /** Situação da atribuição depois dos estornos. Nada é apagado: só o líquido muda. */
-export function attributionStatus(creatorId: string | null, totalCents: number, refundedCents: number): AttributionStatus {
+export function attributionStatus(
+  creatorId: string | null,
+  totalCents: number,
+  refundedCents: number,
+  cancelled = false,
+): AttributionStatus {
   if (creatorId === null) return "sem_criador";
+  if (cancelled) return "cancelada";
   if (refundedCents === 0) return "ativa";
   if (refundedCents >= totalCents) return "revertida";
   return "parcialmente_revertida";

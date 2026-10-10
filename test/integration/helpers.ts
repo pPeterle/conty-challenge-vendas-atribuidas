@@ -48,6 +48,10 @@ export function setup() {
   };
 }
 
+export function signedHeaders(body: string, webhookId = `wh-${++webhookSeq}`): Record<string, string> {
+  return { "content-type": "application/json", "x-shopify-webhook-id": webhookId, "x-shopify-hmac-sha256": signBody(body, SECRET) };
+}
+
 export async function setupWithCreators() {
   const ctx = setup();
   await ctx.createCreator({ id: "ana", name: "Ana", utmCampaign: "ana", coupons: ["ANA10"] });

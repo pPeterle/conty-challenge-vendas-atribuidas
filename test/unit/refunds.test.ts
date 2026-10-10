@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attributionStatus, decideRefund } from "../../src/refunds.ts";
+import { attributionStatus, decideCancellation, decideRefund } from "../../src/refunds.ts";
 
 const base = { orderTotalCents: 10000, alreadyAppliedCents: 0, orderCurrency: "BRL", refundCurrency: "BRL" };
 
@@ -39,11 +39,19 @@ describe("decideRefund", () => {
   });
 });
 
+describe("decideCancellation", () => {
+  it("reverte o que resta, ou registra rejeitado se nada resta", () => {
+    expect(decideCancellation(10000, 3000)).toMatchObject({ status: "aplicado", appliedCents: 7000 });
+    expect(decideCancellation(10000, 10000)).toMatchObject({ status: "rejeitado", appliedCents: 0 });
+  });
+});
+
 describe("attributionStatus", () => {
   it("vai de ativa para parcialmente revertida e revertida conforme os estornos", () => {
     expect(attributionStatus("ana", 100, 0)).toBe("ativa");
     expect(attributionStatus("ana", 100, 40)).toBe("parcialmente_revertida");
     expect(attributionStatus("ana", 100, 100)).toBe("revertida");
     expect(attributionStatus(null, 100, 0)).toBe("sem_criador");
+    expect(attributionStatus("ana", 100, 100, true)).toBe("cancelada");
   });
 });
