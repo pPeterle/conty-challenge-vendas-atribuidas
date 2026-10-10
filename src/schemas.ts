@@ -124,12 +124,25 @@ function calendarDateExists(value: string): boolean {
   return day.getUTCFullYear() === y && day.getUTCMonth() === m - 1 && day.getUTCDate() === d;
 }
 
+/**
+ * O zod aceita qualquer ±hh:mm no fuso. +24:00 e +23:60 viram NaN no Date.parse, e -15:00 passa
+ * mas não existe. Fusos reais vão de -12:00 a +14:00; aceito até ±14:00.
+ */
+export function hasPlausibleOffset(value: string): boolean {
+  const m = /([+-])(\d{2}):?(\d{2})$/.exec(value);
+  if (!m) return true; // "Z"
+  return Number(m[3]) <= 59 && Number(m[2]) * 60 + Number(m[3]) <= 14 * 60;
+}
+
 /** Data com fuso explícito: sem ele, o instante dependeria do fuso do servidor. */
 const timestampOf = (field: string) =>
   z
     .string()
     .datetime({ offset: true })
-    .refine(calendarDateExists, { message: `${field} tem uma data que não existe no calendário` });
+    .refine(hasPlausibleOffset, { message: `${field} tem um fuso impossível (aceito de -14:00 a +14:00)` })
+    .refine((v) => !hasPlausibleOffset(v) || (calendarDateExists(v) && Number.isFinite(Date.parse(v))), {
+      message: `${field} tem uma data que não existe no calendário`,
+    });
 const timestamp = timestampOf("created_at");
 
 // ---------------------------------------------------------------- webhooks

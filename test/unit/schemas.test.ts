@@ -91,6 +91,20 @@ describe("mensagens de erro", () => {
   });
 });
 
+describe("fuso da data", () => {
+  const base = { id: 1, total_price: "1.00", currency: "BRL", financial_status: "paid" };
+  it.each(["+24:00", "+99:00", "+23:60", "-15:00", "+14:01"])("fuso impossível %s é recusado com mensagem própria", (offset) => {
+    const parsed = parseOrderPayload({ ...base, created_at: `2026-01-01T10:00:00${offset}` });
+    expect(parsed.success).toBe(false);
+    if (parsed.success) return;
+    expect(parsed.error.issues.map((i) => i.message)).toEqual(["created_at tem um fuso impossível (aceito de -14:00 a +14:00)"]);
+  });
+
+  it.each(["+14:00", "-14:00", "+05:45", "Z"])("fuso %s é aceito", (offset) => {
+    expect(parseOrderPayload({ ...base, created_at: `2026-01-01T10:00:00${offset}` }).success).toBe(true);
+  });
+});
+
 describe("HMAC", () => {
   it("aceita assinatura correta e recusa corpo alterado", () => {
     const body = '{"id":1}';
