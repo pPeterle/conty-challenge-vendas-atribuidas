@@ -34,6 +34,10 @@ export function decideRefund(input: RefundDecisionInput): RefundDecision {
   if (input.requestedCents === 0) {
     return { status: "rejeitado", appliedCents: 0, reason: "estorno sem valor: nenhuma transação de refund com sucesso" };
   }
+  // Pedido de R$ 0,00 (ex.: brinde com cupom de 100%) conta como venda atribuída, mas não tem o que estornar.
+  if (input.orderTotalCents === 0) {
+    return { status: "rejeitado", appliedCents: 0, reason: "pedido de valor zero: não há o que estornar" };
+  }
   const remaining = Math.max(0, input.orderTotalCents - input.alreadyAppliedCents);
   if (input.requestedCents <= remaining) {
     return { status: "aplicado", appliedCents: input.requestedCents, reason: null };

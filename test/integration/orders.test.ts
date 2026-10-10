@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { order, setup, setupWithCreators } from "./helpers.ts";
+import { order, refund, setup, setupWithCreators } from "./helpers.ts";
 
 describe("webhook de pedido", () => {
   it("pedido novo é gravado com a atribuição e o motivo", async () => {
@@ -123,6 +123,16 @@ describe("webhook de pedido", () => {
     const res = await ctx.sendOrder(order({ total_price: "1.230" }));
     expect(res.status).toBe(201);
     expect(((await res.json()) as any).order.totalCents).toBe(123);
+  });
+
+  it("pedido de valor zero é aceito e atribuído; estorno nele é rejeitado com motivo", async () => {
+    const ctx = await setupWithCreators();
+    const res = await ctx.sendOrder(order({ total_price: "0.00" }));
+    expect(res.status).toBe(201);
+    expect(((await res.json()) as any).order).toMatchObject({ totalCents: 0, netCents: 0, attribution: { creatorId: "ana", status: "ativa" } });
+    const r = await ctx.sendRefund(refund(1, "10.00"));
+    expect(((await r.json()) as any).refund).toMatchObject({ status: "rejeitado", appliedCents: 0, reason: "pedido de valor zero: não há o que estornar" });
+    expect((await ctx.getJson("/creators/summary")).body.creators[0]).toMatchObject({ orders: 1, grossCents: 0, refundedCents: 0, netCents: 0 });
   });
 
   it("id 123 e \"0123\" são o mesmo pedido; id 0 é recusado", async () => {
