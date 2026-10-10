@@ -104,6 +104,21 @@ export function logRejectedDelivery(
   });
 }
 
+/**
+ * Estorno sem nenhuma transação concluída (só pending/failure) não é gravado:
+ * gravar travaria o refund_id, e a versão com success que vem depois seria
+ * tratada como repetição. Só a entrega fica no log.
+ */
+export function logRefundWithoutConcludedTransaction(store: Store, clock: Clock, payload: RefundPayload, webhookId: string): void {
+  store.logDelivery({
+    webhookId,
+    topic: "refunds/create",
+    resourceId: payload.refundId,
+    outcome: "sem_transacao_concluida",
+    receivedAt: clock.now().toISOString(),
+  });
+}
+
 export function ingestRefund(store: Store, clock: Clock, payload: RefundPayload, webhookId: string): IngestResult {
   const now = clock.now().toISOString();
   return store.transaction(() => {

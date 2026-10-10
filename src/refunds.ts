@@ -32,7 +32,7 @@ export function decideRefund(input: RefundDecisionInput): RefundDecision {
     };
   }
   if (input.requestedCents === 0) {
-    return { status: "rejeitado", appliedCents: 0, reason: "estorno sem valor: nenhuma transação de refund com sucesso" };
+    return { status: "rejeitado", appliedCents: 0, reason: "estorno sem valor: as transações concluídas somam zero" };
   }
   // Pedido de R$ 0,00 (ex.: brinde com cupom de 100%) conta como venda atribuída, mas não tem o que estornar.
   if (input.orderTotalCents === 0) {

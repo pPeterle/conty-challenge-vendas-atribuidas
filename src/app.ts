@@ -15,6 +15,7 @@ import {
   ingestRefund,
   listOrderRefunds,
   logIgnoredOrder,
+  logRefundWithoutConcludedTransaction,
   logRejectedDelivery,
   registerCreator,
 } from "./sales.ts";
@@ -125,6 +126,10 @@ export function createApp({ db, clock, webhookSecret }: AppDeps) {
   app.post("/webhooks/shopify/refunds", verifySignature, validate("header", webhookHeadersSchema), async (c) => {
     const webhookId = c.req.valid("header")["x-shopify-webhook-id"];
     const refund = await parseWebhook(await c.req.text(), refundWebhookSchema, "refunds/create", webhookId);
+    if (refund.concludedTransactions === 0) {
+      logRefundWithoutConcludedTransaction(store, clock, refund, webhookId);
+      return c.json({ result: "sem_transacao_concluida", refundId: refund.refundId, orderId: refund.orderId }, 200);
+    }
     const result = ingestRefund(store, clock, refund, webhookId);
     return c.json({ result, refund: getRefundView(store, refund.refundId) }, result === "criado" ? 201 : 200);
   });

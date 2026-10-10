@@ -200,9 +200,11 @@ export const refundWebhookSchema = z
   })
   .transform((r, ctx) => {
     let amountCents = 0;
+    let concludedTransactions = 0;
     let refundCurrency: string | null = null;
     r.transactions.forEach((tx, i) => {
       if (tx.kind !== "refund" || tx.status !== "success") return;
+      concludedTransactions += 1;
       const cents = parseMoneyToCents(tx.amount);
       if (cents === null) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["transactions", i, "amount"], message: 'amount da transação precisa ser string decimal, ex.: "50.00"' });
@@ -222,7 +224,7 @@ export const refundWebhookSchema = z
       }
       amountCents += cents;
     });
-    return { refundId: r.id, orderId: r.order_id, createdAt: r.created_at, amountCents, currency: refundCurrency };
+    return { refundId: r.id, orderId: r.order_id, createdAt: r.created_at, amountCents, currency: refundCurrency, concludedTransactions };
   });
 export type RefundPayload = z.output<typeof refundWebhookSchema>;
 

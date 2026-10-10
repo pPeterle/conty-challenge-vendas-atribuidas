@@ -148,14 +148,32 @@ describe("webhook de estorno", () => {
     expect(view.body.refunds.every((r: any) => r.status === "aplicado")).toBe(true);
   });
 
-  it("estorno só com transação com falha é rejeitado com motivo e não muda o líquido", async () => {
+  it("estorno sem transação concluída não é gravado; a versão pending -> success é aplicada depois", async () => {
     const ctx = await setupWithCreators();
     await ctx.sendOrder(order());
-    await ctx.sendRefund(refund(1, "50.00", { transactions: [{ amount: "50.00", kind: "refund", status: "failure" }] }));
+    for (const status of ["pending", "failure"]) {
+      const res = await ctx.sendRefund(refund(1, "50.00", { transactions: [{ amount: "50.00", kind: "refund", status }] }));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ result: "sem_transacao_concluida", refundId: "1", orderId: "1001" });
+    }
+    expect((await ctx.getJson("/refunds/1")).status).toBe(404);
+    expect((await ctx.getJson("/orders/1001")).body.netCents).toBe(10000);
+
+    const done = await ctx.sendRefund(refund(1, "50.00", { transactions: [{ amount: "50.00", kind: "refund", status: "success" }] }));
+    expect(done.status).toBe(201);
+    expect(((await done.json()) as any).refund).toMatchObject({ status: "aplicado", appliedCents: 5000 });
+    expect((await ctx.getJson("/orders/1001")).body.netCents).toBe(5000);
+    const log = ctx.db.prepare("SELECT outcome FROM webhook_deliveries WHERE topic = 'refunds/create' ORDER BY delivery_id").all();
+    expect(log.map((r: any) => r.outcome)).toEqual(["sem_transacao_concluida", "sem_transacao_concluida", "criado"]);
+  });
+
+  it("estorno com transação success de valor zero é gravado como rejeitado, com motivo", async () => {
+    const ctx = await setupWithCreators();
+    await ctx.sendOrder(order());
+    await ctx.sendRefund(refund(1, "0.00"));
     const view = (await ctx.getJson("/refunds/1")).body;
     expect(view).toMatchObject({ status: "rejeitado", requestedCents: 0, appliedCents: 0 });
-    expect(view.reason).toContain("nenhuma transação de refund com sucesso");
-    expect((await ctx.getJson("/orders/1001")).body.netCents).toBe(10000);
+    expect(view.reason).toBe("estorno sem valor: as transações concluídas somam zero");
   });
 
   it("o banco recusa apagar estorno ou passar do total, mesmo fora da API", async () => {
